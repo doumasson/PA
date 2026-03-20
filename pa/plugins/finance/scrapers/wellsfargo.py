@@ -25,8 +25,9 @@ class WellsFargoScraper(BaseScraper):
     ACCOUNTS_URL = "https://connect.secure.wellsfargo.com/accounts/start"
 
     async def login(self, credentials: dict[str, Any]) -> None:
-        await self._page.goto(self.LOGIN_URL, wait_until="networkidle", timeout=30000)
+        await self._page.goto(self.LOGIN_URL, timeout=60000)
         await self._human_delay()
+        await self._page.screenshot(path="/tmp/wf_login.png")
 
         await self._page.fill('input[name="j_username"]', credentials["username"])
         await self._human_delay()
@@ -35,7 +36,8 @@ class WellsFargoScraper(BaseScraper):
         await self._human_delay()
 
         await self._page.click('button[type="submit"]')
-        await self._page.wait_for_load_state("networkidle", timeout=30000)
+        await self._page.wait_for_load_state("domcontentloaded", timeout=60000)
+        await self._page.screenshot(path="/tmp/wf_post_login.png")
 
         if await self._check_mfa():
             code = await self._mfa_bridge.request_mfa(
@@ -45,7 +47,7 @@ class WellsFargoScraper(BaseScraper):
             await self._submit_mfa(code)
 
     async def get_balances(self) -> list[BalanceData]:
-        await self._page.goto(self.ACCOUNTS_URL, wait_until="networkidle", timeout=30000)
+        await self._page.goto(self.ACCOUNTS_URL, wait_until="domcontentloaded", timeout=60000)
         await self._human_delay()
 
         # Take a screenshot for debugging if needed
@@ -193,7 +195,7 @@ class WellsFargoScraper(BaseScraper):
                 continue
         await self._human_delay()
         await self._page.click('button[type="submit"]')
-        await self._page.wait_for_load_state("networkidle", timeout=30000)
+        await self._page.wait_for_load_state("domcontentloaded", timeout=60000)
 
     async def _human_delay(self) -> None:
         await asyncio.sleep(random.uniform(0.5, 2.0))
