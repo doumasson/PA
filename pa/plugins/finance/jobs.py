@@ -6,7 +6,7 @@ def get_finance_jobs() -> list[Job]:
         pass
 
     return [
-        Job(name="bank_balance", handler=noop, trigger="interval", kwargs={"hours": 4, "jitter": 900}),
+        Job(name="bank_balance", handler=noop, trigger="interval", kwargs={"hours": 4}),
         Job(name="cc_balance", handler=noop, trigger="cron", kwargs={"hour": 6, "minute": 0}),
         Job(name="transaction_pull", handler=noop, trigger="cron", kwargs={"hour": 7, "minute": 0}),
         Job(name="due_date_check", handler=noop, trigger="cron", kwargs={"hour": 8, "minute": 0}),

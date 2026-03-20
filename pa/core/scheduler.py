@@ -37,7 +37,6 @@ class PAScheduler:
             if job.trigger == "interval":
                 trigger = IntervalTrigger(
                     hours=job.kwargs.get("hours", 4),
-                    jitter=job.kwargs.get("jitter", 0),
                 )
             else:
                 trigger_kwargs = {k: v for k, v in job.kwargs.items()}
