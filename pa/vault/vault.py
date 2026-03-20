@@ -33,9 +33,11 @@ class Vault:
         await self._save()
 
     async def unlock(self, master_password: str) -> None:
-        """Unlock an existing vault."""
+        """Unlock an existing vault, or create a new one on first use."""
         if not self._params_path.exists():
-            raise VaultAuthError("No vault found")
+            self._dir.mkdir(parents=True, exist_ok=True)
+            await self.init(master_password)
+            return
         params = json.loads(self._params_path.read_text(encoding="utf-8"))
         key, _ = derive_key(master_password, params=params)
         try:

@@ -104,6 +104,13 @@ class PABot:
     async def _handle_unlock(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not self._check_auth(update):
             return
+        # Clean up any prior stacked prompt
+        old_prompt = context.user_data.pop("_prompt_message", None)
+        if old_prompt:
+            try:
+                await old_prompt.delete()
+            except Exception:
+                pass
         prompt_msg = await update.message.reply_text("Send your master password:")
         context.user_data["awaiting_password"] = True
         context.user_data["_prompt_message"] = prompt_msg
@@ -156,10 +163,16 @@ class PABot:
                 except Exception:
                     pass
             try:
+                was_new = not self._vault._params_path.exists()
                 await self._vault.unlock(password)
                 if self._vault.derived_key and hasattr(self._store, 'reconnect_encrypted'):
                     await self._store.reconnect_encrypted(self._vault.derived_key)
-                await update.effective_chat.send_message("Vault unlocked.")
+                if was_new:
+                    await update.effective_chat.send_message(
+                        "Vault created and unlocked. Remember this password!"
+                    )
+                else:
+                    await update.effective_chat.send_message("Vault unlocked.")
             except Exception:
                 await update.effective_chat.send_message("Wrong password. Try /unlock again.")
             return
