@@ -44,6 +44,12 @@ class Store:
         await self._db.commit()
         return cursor.lastrowid
 
+    async def execute_rowcount(self, sql: str, params: tuple = ()) -> int:
+        """Execute a statement and return the number of rows affected."""
+        cursor = await self._db.execute(sql, params)
+        await self._db.commit()
+        return cursor.rowcount
+
     async def executemany(self, sql: str, params_list: list[tuple]) -> None:
         await self._db.executemany(sql, params_list)
         await self._db.commit()
