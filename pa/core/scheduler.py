@@ -7,6 +7,11 @@ from apscheduler.triggers.interval import IntervalTrigger
 from pa.plugins import Job
 
 
+async def _heartbeat_handler(job_name: str = "heartbeat") -> None:
+    """Module-level heartbeat handler — APScheduler 4.x requires serializable refs."""
+    pass
+
+
 class PAScheduler:
     def __init__(self):
         self._scheduler = AsyncScheduler()
@@ -15,14 +20,10 @@ class PAScheduler:
         self._paused = False
         self._jobs.append(Job(
             name="heartbeat",
-            handler=self._heartbeat,
+            handler=_heartbeat_handler,
             trigger="cron",
             kwargs={"hour": 12, "minute": 0},
         ))
-
-    async def _heartbeat(self, job_name: str = "heartbeat") -> None:
-        if self._alert_handler:
-            await self._alert_handler(job_name)
 
     def register_job(self, job: Job) -> None:
         self._jobs.append(job)
