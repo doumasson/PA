@@ -1,0 +1,22 @@
+CREATE TABLE IF NOT EXISTS recipes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    plugin TEXT NOT NULL,
+    name TEXT NOT NULL UNIQUE,
+    steps TEXT NOT NULL,
+    schema_version INTEGER NOT NULL DEFAULT 1,
+    last_success TEXT,
+    fail_count INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS query_templates (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    pattern TEXT NOT NULL UNIQUE,
+    sql_template TEXT NOT NULL,
+    format_template TEXT NOT NULL,
+    plugin TEXT NOT NULL,
+    hit_count INTEGER NOT NULL DEFAULT 0,
+    last_used TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
