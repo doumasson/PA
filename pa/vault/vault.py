@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from pa.exceptions import VaultAuthError, VaultLockedError
+from pa.core.exceptions import VaultAuthError, VaultLockedError
 from pa.vault.crypto import derive_key, encrypt, decrypt
 
 
