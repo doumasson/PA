@@ -31,6 +31,7 @@ class PAScheduler:
         self._alert_handler = handler
 
     async def start(self) -> None:
+        await self._scheduler.__aenter__()
         for job in self._jobs:
             handler = job.handler
             if job.trigger == "interval":
@@ -47,7 +48,7 @@ class PAScheduler:
         await self._scheduler.start_in_background()
 
     async def stop(self) -> None:
-        await self._scheduler.stop()
+        await self._scheduler.__aexit__(None, None, None)
 
     def get_job_names(self) -> list[str]:
         return [j.name for j in self._jobs]
