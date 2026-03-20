@@ -15,7 +15,7 @@ from pa.plugins import Command, AppContext
 
 
 class PABot:
-    _builtin_commands = {"unlock", "lock", "status", "help", "plugins"}
+    _builtin_commands = {"unlock", "lock", "status", "help", "plugins", "addcred", "creds", "delcred"}
 
     def __init__(self, config: Any, vault: Any, store: Any, brain: Any, mfa_bridge: Any):
         self._config = config
@@ -40,6 +40,9 @@ class PABot:
             f"**{NAME} Commands**\n",
             "/unlock - Enter master password",
             "/lock - Lock vault",
+            "/addcred - Add institution credentials",
+            "/creds - List stored credentials",
+            "/delcred - Remove credentials",
             "/status - System status",
             "/plugins - Active plugins",
         ]
@@ -56,6 +59,9 @@ class PABot:
         builtins = {
             "unlock": self._handle_unlock,
             "lock": self._handle_lock,
+            "addcred": self._handle_addcred,
+            "creds": self._handle_creds,
+            "delcred": self._handle_delcred,
             "status": self._handle_status,
             "help": self._handle_help,
             "plugins": self._handle_plugins,
@@ -146,22 +152,72 @@ class PABot:
             text = "No plugins loaded."
         await update.message.reply_text(text)
 
+    async def _handle_addcred(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if not self._check_auth(update):
+            return
+        if not self._vault.is_unlocked:
+            await update.message.reply_text("Vault is locked. Send /unlock first.")
+            return
+        institution = " ".join(context.args) if context.args else None
+        if institution:
+            context.user_data["addcred"] = {"institution": institution, "step": "username"}
+            prompt = await update.message.reply_text(f"Username for {institution}:")
+            context.user_data["_addcred_prompt"] = prompt
+        else:
+            context.user_data["addcred"] = {"step": "institution"}
+            prompt = await update.message.reply_text("Institution name (e.g. wellsfargo, synchrony):")
+            context.user_data["_addcred_prompt"] = prompt
+
+    async def _handle_creds(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if not self._check_auth(update):
+            return
+        if not self._vault.is_unlocked:
+            await update.message.reply_text("Vault is locked. Send /unlock first.")
+            return
+        creds = self._vault._data
+        if not creds:
+            await update.message.reply_text("No credentials stored. Use /addcred to add some.")
+            return
+        lines = ["Stored credentials:\n"]
+        for inst, data in sorted(creds.items()):
+            username = data.get("username", "?")
+            lines.append(f"  {inst}: {username}")
+        await update.message.reply_text("\n".join(lines))
+
+    async def _handle_delcred(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if not self._check_auth(update):
+            return
+        if not self._vault.is_unlocked:
+            await update.message.reply_text("Vault is locked. Send /unlock first.")
+            return
+        if not context.args:
+            await update.message.reply_text("Usage: /delcred <institution>")
+            return
+        institution = " ".join(context.args)
+        if institution not in self._vault._data:
+            await update.message.reply_text(f"No credentials found for '{institution}'.")
+            return
+        del self._vault._data[institution]
+        await self._vault._save()
+        await update.message.reply_text(f"Credentials for '{institution}' removed.")
+
+    async def _delete_msg(self, msg: Any) -> None:
+        if msg:
+            try:
+                await msg.delete()
+            except Exception:
+                pass
+
     async def _handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not self._check_auth(update):
             return
+
+        # Vault unlock flow
         if context.user_data.get("awaiting_password"):
             context.user_data["awaiting_password"] = False
             password = update.message.text
-            try:
-                await update.message.delete()
-            except Exception:
-                pass
-            prompt_msg = context.user_data.pop("_prompt_message", None)
-            if prompt_msg:
-                try:
-                    await prompt_msg.delete()
-                except Exception:
-                    pass
+            await self._delete_msg(update.message)
+            await self._delete_msg(context.user_data.pop("_prompt_message", None))
             try:
                 was_new = not self._vault._params_path.exists()
                 await self._vault.unlock(password)
@@ -177,6 +233,45 @@ class PABot:
                 await update.effective_chat.send_message("Wrong password. Try /unlock again.")
             return
 
+        # Add credential flow
+        addcred = context.user_data.get("addcred")
+        if addcred:
+            step = addcred["step"]
+            text = update.message.text.strip()
+            await self._delete_msg(context.user_data.pop("_addcred_prompt", None))
+
+            if step == "institution":
+                addcred["institution"] = text
+                addcred["step"] = "username"
+                await self._delete_msg(update.message)
+                prompt = await update.effective_chat.send_message(f"Username for {text}:")
+                context.user_data["_addcred_prompt"] = prompt
+            elif step == "username":
+                addcred["username"] = text
+                addcred["step"] = "password"
+                await self._delete_msg(update.message)
+                prompt = await update.effective_chat.send_message(
+                    f"Password for {addcred['institution']}:"
+                )
+                context.user_data["_addcred_prompt"] = prompt
+            elif step == "password":
+                await self._delete_msg(update.message)
+                institution = addcred["institution"]
+                username = addcred["username"]
+                del context.user_data["addcred"]
+                try:
+                    await self._vault.add(institution, {
+                        "username": username,
+                        "password": text,
+                    })
+                    await update.effective_chat.send_message(
+                        f"Credentials saved for {institution}."
+                    )
+                except Exception as e:
+                    await update.effective_chat.send_message(f"Error saving: {e}")
+            return
+
+        # MFA relay
         for inst in list(self._mfa_bridge._pending.keys()):
             if self._mfa_bridge.has_pending(inst):
                 await self._mfa_bridge.provide_mfa(inst, update.message.text)
