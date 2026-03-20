@@ -123,15 +123,28 @@ class Job:
     kwargs: dict[str, Any] = field(default_factory=dict)  # trigger kwargs
 
 
-class Plugin:
-    """Base class for all PA plugins."""
+@dataclass
+class AppContext:
+    """Typed context passed to plugins — no reaching into internals."""
+    store: Any       # core Store instance
+    vault: Any       # vault Vault instance
+    brain: Any       # core Brain instance
+    bot: Any         # core Bot instance
+    scheduler: Any   # core Scheduler instance
+    config: Any      # core Config instance
+
+
+class PluginBase:
+    """Base class for all PA plugins. Subclass and override what you need."""
 
     name: str                          # "finance"
     description: str                   # "Financial tracking and insights"
     version: str = "0.1.0"
 
     def schema_sql(self) -> str:
-        """Return DDL for this plugin's tables. Called once at startup."""
+        """Return DDL for this plugin's tables. Called once at startup.
+        Plugin tables MUST be prefixed with the plugin name (e.g., finance_accounts).
+        DDL runs inside a transaction — errors roll back cleanly."""
         return ""
 
     def commands(self) -> list[Command]:
@@ -144,7 +157,9 @@ class Plugin:
 
     def tier_patterns(self) -> dict[str, list[str]]:
         """Return keyword patterns for brain tier classification.
-        Keys: 'fast', 'standard', 'deep'. Values: regex pattern lists."""
+        Keys: 'fast', 'standard', 'deep'. Values: regex pattern lists.
+        Merge strategy: patterns are appended per tier across plugins.
+        Priority order: deep > standard > fast (first match wins)."""
         return {}
 
     def system_prompt_fragment(self) -> str:
@@ -152,8 +167,8 @@ class Plugin:
         Combined with identity persona and other plugins' fragments."""
         return ""
 
-    async def on_startup(self, app: Any) -> None:
-        """Called after all modules are initialized. Plugin can grab refs it needs."""
+    async def on_startup(self, ctx: AppContext) -> None:
+        """Called after all modules are initialized. Use ctx to access core services."""
         pass
 
     async def on_shutdown(self) -> None:
@@ -163,14 +178,16 @@ class Plugin:
 
 ### 2.3 Plugin Discovery
 
-`pa/plugins/__init__.py` scans all subdirectories of `pa/plugins/` for modules that export a `Plugin` subclass. Registration order is alphabetical by plugin name. Each plugin's `schema_sql()` runs during store initialization.
+`pa/plugins/__init__.py` scans all subdirectories of `pa/plugins/` for modules that export a `PluginBase` subclass. Registration order is alphabetical by plugin name. Each plugin's `schema_sql()` runs inside a transaction during store initialization — errors roll back without corrupting core tables.
 
 ```python
 # pa/plugins/__init__.py
-def discover_plugins() -> list[Plugin]:
-    """Scan pa/plugins/ subdirectories, import each, collect Plugin subclasses."""
+def discover_plugins() -> list[PluginBase]:
+    """Scan pa/plugins/ subdirectories, import each, collect PluginBase subclasses."""
     ...
 ```
+
+Plugin DDL is validated: only `CREATE TABLE` and `CREATE INDEX` statements are allowed (no `DROP`, `DELETE`, `UPDATE`, `INSERT`). Table names must be prefixed with the plugin name.
 
 ### 2.4 Core Wiring (app.py)
 
@@ -225,7 +242,7 @@ CREATE TABLE IF NOT EXISTS recipes (
     plugin TEXT NOT NULL,
     name TEXT NOT NULL UNIQUE,
     steps TEXT NOT NULL,              -- JSON array of action objects
-    version INTEGER NOT NULL DEFAULT 1,
+    schema_version INTEGER NOT NULL DEFAULT 1,  -- step format version; stale if < current
     last_success TEXT,
     fail_count INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -248,6 +265,8 @@ CREATE TABLE IF NOT EXISTS recipes (
 ```
 
 Special `$cred.*` variables are resolved from the vault at runtime. No credentials stored in recipes.
+
+**Credential variable allowlist:** Only `$cred.username` and `$cred.password` are resolvable. Any recipe step referencing other `$cred.*` fields is rejected at save time. This prevents AI-generated recipes from leaking sensitive fields (SSN, security questions, PINs) through fill actions.
 
 **Recipe engine flow (`pa/scrapers/recipe.py`):**
 
@@ -290,12 +309,15 @@ CREATE TABLE IF NOT EXISTS query_templates (
 **Flow:**
 
 1. User sends free-form question
-2. Core checks all `query_templates` — if pattern matches, execute SQL directly, format response, return (zero API cost)
+2. Core checks all `query_templates` — if pattern matches, execute SQL on a **read-only connection** (`PRAGMA query_only = ON`), format response, return (zero API cost)
 3. On cache miss: send to Brain. Brain response includes optional `__template` metadata block:
    ```json
    {"pattern": "total (credit card |)debt", "sql": "SELECT ...", "format": "Your total debt is ${total:,.2f}"}
    ```
-4. If template metadata present, save to `query_templates`
+4. If template metadata present, **validate before saving:**
+   - SQL must start with `SELECT` (no DDL/DML — `DROP`, `DELETE`, `UPDATE`, `INSERT` rejected)
+   - Pattern must be under 200 characters (prevents regex DoS)
+   - Pattern must compile without error
 5. Template hits increment `hit_count` for analytics
 
 **Template invalidation:** If a template's SQL returns an error (schema changed), the template is deleted and the question falls through to AI.
@@ -336,12 +358,12 @@ The finance plugin (`pa/plugins/finance/`) encapsulates everything financial:
 
 ### 4.1 Schema (`schema.sql`)
 
-Moves existing tables here:
-- `accounts` (id, institution, name, type, interest_rate, credit_limit)
-- `balances` (account_id, balance, statement_balance, available_credit, minimum_payment, due_date)
-- `transactions` (account_id, date, posted_date, description, amount, category, dedup_hash, is_pending)
-- `scrape_log` (institution, account_id, status, error_message, duration_seconds)
-- `merchant_categories` (pattern, category, confidence, source, hit_count)
+Moves existing tables here, prefixed with `finance_`:
+- `finance_accounts` (id, institution, name, type, interest_rate, credit_limit)
+- `finance_balances` (account_id, balance, statement_balance, available_credit, minimum_payment, due_date)
+- `finance_transactions` (account_id, date, posted_date, description, amount, category, dedup_hash, is_pending)
+- `finance_scrape_log` (institution, account_id, status, error_message, duration_seconds)
+- `finance_merchant_categories` (pattern, category, confidence, source, hit_count)
 
 ### 4.2 Commands (`commands.py`)
 
@@ -381,29 +403,60 @@ with numbers. Flag concerning patterns proactively.
 
 This is a refactor of existing working code, not a rewrite. The approach:
 
-1. Create `pa/core/` and move generic modules there (config, store, brain, scheduler, bot, exceptions)
-2. Create `pa/core/identity.py` with George's name
-3. Create plugin protocol and registry in `pa/plugins/__init__.py`
-4. Create `pa/plugins/finance/` and move financial logic there
-5. Create `pa/scrapers/recipe.py` (learn-once engine)
-6. Add recipe and query_template tables to core schema
-7. Rewire `pa/__main__.py` → `pa/core/app.py`
-8. Update all imports across codebase
-9. Restructure tests to mirror new layout
-10. Verify all 67+ tests still pass
+**Phase 1: Core extraction**
+1. Create `pa/core/` directory structure
+2. Create `pa/core/identity.py` with George's name/persona
+3. Move `config.py` → `pa/core/config.py` (unchanged)
+4. Move `exceptions.py` → `pa/core/exceptions.py` (keep only base exceptions: `PAError`, `VaultAuthError`, `VaultLockedError`)
+5. Strip `store.py` down to generic SQLite wrapper → `pa/core/store.py`. Public API: `connect()`, `close()`, `execute()`, `executemany()`, `fetchone()`, `fetchall()`, `init_schema()`, `reconnect_encrypted()`. **Extract all finance methods** (`add_account`, `get_balances`, `add_transaction`, etc.) into `pa/plugins/finance/repository.py`
+6. Strip `brain.py` → `pa/core/brain.py`. **Remove `build_system_prompt()`** — replace with generic prompt builder that concatenates `identity.PERSONA` + all plugin `system_prompt_fragment()` outputs. Core brain accepts a system prompt string, does not build domain-specific prompts
+7. Move `tier.py` → `pa/core/tier.py`. **Replace module-level pattern constants** with a dynamic registry. `classify_tier()` accepts merged plugin patterns
+8. Move `cost_tracker.py` → `pa/core/cost_tracker.py` (unchanged)
+9. Strip `scheduler.py` → `pa/core/scheduler.py`. **Remove `_setup_default_jobs()`** — keep only `heartbeat` as built-in. Add `register_job(Job)` method
+10. Strip `bot.py` → `pa/core/bot.py`. **Remove all hardcoded financial command handlers.** Add `register_command(Command)` method. Keep only built-in commands: `/unlock`, `/lock`, `/status`, `/help`, `/plugins`. **Replace direct `self._store.get_latest_balances()` calls** with plugin-mediated context
+11. Move `vault/` → `pa/vault/` (unchanged)
+12. Move `scrapers/base.py`, `scrapers/mfa_bridge.py` → `pa/scrapers/` (unchanged)
+
+**Phase 2: Plugin system**
+13. Create plugin protocol and AppContext in `pa/plugins/__init__.py`
+14. Create `pa/plugins/finance/plugin.py` implementing `PluginBase`
+15. Create `pa/plugins/finance/repository.py` — finance-specific store methods extracted from old `store.py`
+16. Create `pa/plugins/finance/commands.py` — handlers extracted from old `bot.py`
+17. Create `pa/plugins/finance/formatters.py` — extracted from old `handlers.py`
+18. Create `pa/plugins/finance/jobs.py` — job definitions extracted from old `scheduler.py`
+19. Create `pa/plugins/finance/tier_patterns.py` — financial patterns extracted from old `tier.py`
+20. Move `scrapers/wellsfargo.py`, `synchrony.py`, `credit_one.py` → `pa/plugins/finance/scrapers/`
+21. Create `pa/plugins/finance/schema.sql` — financial tables extracted from old `schema.sql`
+
+**Phase 3: Learn-once engine**
+22. Create `pa/scrapers/recipe.py` — recipe engine
+23. Add `recipes` and `query_templates` tables to core schema
+
+**Phase 4: Wiring and entry point**
+24. Create `pa/core/app.py` — plugin discovery, wiring, startup/shutdown
+25. Update `pa/__main__.py` to call `pa/core/app.py`
+26. Update all imports across codebase
+
+**Phase 5: Tests**
+27. Restructure tests to mirror new layout
+28. Verify all existing tests pass (rewritten for new imports)
+29. Add new tests: plugin registry, recipe engine, identity, query templates
 
 No functionality changes — same features, better architecture.
 
 ---
 
-## 6. Security Rules (Unchanged)
+## 6. Security Rules
+
+Carried forward from v1, with additions for new systems:
 
 - All credentials through vault only
 - No sensitive data in logs
 - Read-only v1 — no money movement
-- Recipe steps use `$cred.*` variables, never raw credentials
-- Query templates execute parameterized SQL only (no string interpolation)
 - Single-user auth on all bot commands
+- **Recipe security:** Steps use `$cred.*` variables (allowlisted to `username` and `password` only), never raw credentials. Recipes validated at save time
+- **Query template security:** Templates execute on a read-only DB connection. SQL validated to be SELECT-only before saving. Regex patterns length-capped at 200 chars
+- **Plugin DDL security:** Plugin schema runs in a transaction, validated to contain only CREATE TABLE/INDEX statements with plugin-prefixed table names
 
 ---
 
