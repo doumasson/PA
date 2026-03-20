@@ -24,20 +24,65 @@ class WellsFargoScraper(BaseScraper):
     LOGIN_URL = "https://connect.secure.wellsfargo.com/auth/login/present"
     ACCOUNTS_URL = "https://connect.secure.wellsfargo.com/accounts/start"
 
+    async def _dump_page(self, label: str) -> None:
+        """Save page HTML to /tmp for debugging on headless Pi."""
+        try:
+            html = await self._page.content()
+            path = f"/tmp/wf_{label}.html"
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(html)
+        except Exception:
+            pass
+
     async def login(self, credentials: dict[str, Any]) -> None:
         await self._page.goto(self.LOGIN_URL, timeout=60000)
         await self._human_delay()
-        await self._page.screenshot(path="/tmp/wf_login.png")
+        await self._dump_page("login")
 
-        await self._page.fill('input[name="j_username"]', credentials["username"])
+        # Try multiple selector strategies for username field
+        username_selectors = [
+            'input[name="j_username"]',
+            'input[id="j_username"]',
+            'input[type="text"]',
+            'input[autocomplete="username"]',
+            '#userid',
+            'input[name="userid"]',
+        ]
+        username_el = await self._find_element(username_selectors)
+        if not username_el:
+            raise RuntimeError("Could not find username field. Check /tmp/wf_login.html")
+        await username_el.fill(credentials["username"])
         await self._human_delay()
 
-        await self._page.fill('input[name="j_password"]', credentials["password"])
+        # Try multiple selector strategies for password field
+        password_selectors = [
+            'input[name="j_password"]',
+            'input[id="j_password"]',
+            'input[type="password"]',
+            'input[autocomplete="current-password"]',
+            '#password',
+            'input[name="password"]',
+        ]
+        password_el = await self._find_element(password_selectors)
+        if not password_el:
+            raise RuntimeError("Could not find password field. Check /tmp/wf_login.html")
+        await password_el.fill(credentials["password"])
         await self._human_delay()
 
-        await self._page.click('button[type="submit"]')
+        # Try multiple submit button selectors
+        submit_selectors = [
+            'button[type="submit"]',
+            'input[type="submit"]',
+            'button[id*="sign"]',
+            'a[id*="sign"]',
+            'button:has-text("Sign On")',
+        ]
+        submit_el = await self._find_element(submit_selectors)
+        if not submit_el:
+            raise RuntimeError("Could not find submit button. Check /tmp/wf_login.html")
+        await submit_el.click()
         await self._page.wait_for_load_state("domcontentloaded", timeout=60000)
-        await self._page.screenshot(path="/tmp/wf_post_login.png")
+        await self._dump_page("post_login")
 
         if await self._check_mfa():
             code = await self._mfa_bridge.request_mfa(
@@ -196,6 +241,17 @@ class WellsFargoScraper(BaseScraper):
         await self._human_delay()
         await self._page.click('button[type="submit"]')
         await self._page.wait_for_load_state("domcontentloaded", timeout=60000)
+
+    async def _find_element(self, selectors: list[str]) -> Any:
+        """Try multiple selectors, return the first visible element found."""
+        for selector in selectors:
+            try:
+                el = await self._page.query_selector(selector)
+                if el and await el.is_visible():
+                    return el
+            except Exception:
+                continue
+        return None
 
     async def _human_delay(self) -> None:
         await asyncio.sleep(random.uniform(0.5, 2.0))
