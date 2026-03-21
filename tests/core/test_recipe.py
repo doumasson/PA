@@ -63,3 +63,53 @@ def test_resolve_credentials():
     resolved = engine.resolve_credentials(steps, {"username": "john", "password": "secret"})
     assert resolved[0]["value"] == "john"
     assert resolved[1]["value"] == "secret"
+
+
+class TestRecipeV2:
+    @pytest.mark.asyncio
+    async def test_checkpoint_stored_in_steps(self, engine):
+        steps = [
+            {"action": "fill", "selector": "#user", "value": "$cred.username", "checkpoint": "abc123"},
+            {"action": "click", "selector": "#submit", "checkpoint": "def456"},
+        ]
+        await engine.record("login_bank", "finance", steps)
+        recipe = await engine.get_recipe("login_bank")
+        assert recipe is not None
+        parsed_steps = json.loads(recipe["steps"])
+        assert parsed_steps[0]["checkpoint"] == "abc123"
+
+    @pytest.mark.asyncio
+    async def test_record_overwrites_same_name(self, engine):
+        for i in range(5):
+            await engine.record("login_bank", "finance", [{"action": "click", "selector": f"#btn{i}"}])
+        recipe = await engine.get_recipe("login_bank")
+        parsed = json.loads(recipe["steps"])
+        assert parsed[0]["selector"] == "#btn4"
+
+    @pytest.mark.asyncio
+    async def test_schema_version_2(self, engine):
+        await engine.record("login_bank", "finance", [{"action": "click", "selector": "#btn"}])
+        recipe = await engine.get_recipe("login_bank")
+        assert recipe["schema_version"] >= 2
+
+
+class TestRecipeReplay:
+    @pytest.mark.asyncio
+    async def test_replay_returns_resolved_steps(self, engine):
+        steps = [
+            {"action": "fill", "selector": "#user", "value": "$cred.username", "checkpoint": "abc"},
+            {"action": "fill", "selector": "#pass", "value": "$cred.password", "checkpoint": "def"},
+            {"action": "click", "selector": "#submit", "checkpoint": "ghi"},
+        ]
+        await engine.record("login_bank", "finance", steps)
+        resolved = await engine.get_replay_steps("login_bank", {"username": "john", "password": "secret"})
+        assert resolved is not None
+        assert len(resolved) == 3
+        assert resolved[0]["resolved_value"] == "john"
+        assert resolved[1]["resolved_value"] == "secret"
+        assert resolved[2].get("resolved_value") is None
+
+    @pytest.mark.asyncio
+    async def test_replay_returns_none_for_missing_recipe(self, engine):
+        result = await engine.get_replay_steps("nonexistent", {"username": "u", "password": "p"})
+        assert result is None

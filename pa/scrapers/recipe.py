@@ -6,7 +6,7 @@ from typing import Any
 from pa.core.store import Store
 
 CRED_ALLOWLIST = {"username", "password"}
-CURRENT_SCHEMA_VERSION = 1
+CURRENT_SCHEMA_VERSION = 2
 _CRED_PATTERN = re.compile(r"\$cred\.(\w+)")
 
 
@@ -65,6 +65,22 @@ class RecipeEngine:
             "UPDATE recipes SET last_success = CURRENT_TIMESTAMP, fail_count = 0, updated_at = CURRENT_TIMESTAMP WHERE name = ?",
             (name,),
         )
+
+    async def get_replay_steps(
+        self, name: str, credentials: dict[str, str]
+    ) -> list[dict[str, Any]] | None:
+        """Get recipe steps resolved with credentials, ready for replay."""
+        recipe = await self.get_recipe(name)
+        if recipe is None:
+            return None
+        steps = json.loads(recipe["steps"])
+        resolved = self.resolve_credentials(steps, credentials)
+        for step in resolved:
+            if step.get("action") == "fill" and "value" in step:
+                step["resolved_value"] = step["value"]
+            else:
+                step["resolved_value"] = None
+        return resolved
 
     def resolve_credentials(self, steps: list[dict[str, Any]], credentials: dict[str, str]) -> list[dict[str, Any]]:
         resolved = []
