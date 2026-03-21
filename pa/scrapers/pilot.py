@@ -3,13 +3,18 @@
 import asyncio
 import json
 import logging
+import os
 import random
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Literal
 
 from pa.core.tier import Tier
 from pa.scrapers.page_analyzer import clean_html, compute_page_hash, extract_visible_text, take_screenshot
+
+_DEBUG = os.environ.get("PA_DEBUG_SCRAPER", "") == "1"
+_DEBUG_DIR = Path("/tmp/pa_pilot_debug")
 
 logger = logging.getLogger(__name__)
 
@@ -119,6 +124,17 @@ class AIPilot:
             page_changed = current_hash != prev_hash
             prev_hash = current_hash
 
+            # Debug: save HTML and screenshot at each step
+            if _DEBUG:
+                _DEBUG_DIR.mkdir(parents=True, exist_ok=True)
+                (_DEBUG_DIR / f"step{step:02d}_page.html").write_text(html, encoding="utf-8")
+                (_DEBUG_DIR / f"step{step:02d}_cleaned.html").write_text(cleaned, encoding="utf-8")
+                try:
+                    screenshot = await self._page.screenshot(type="png", full_page=False)
+                    (_DEBUG_DIR / f"step{step:02d}_screenshot.png").write_bytes(screenshot)
+                except Exception:
+                    pass
+
             action_history = json.dumps(actions[-10:], indent=2) if actions else "None yet"
             prompt = PILOT_SYSTEM_PROMPT.format(
                 goal=goal,
@@ -140,7 +156,11 @@ class AIPilot:
                 return PilotResult(status="error", actions=actions, error=f"Claude API error: {e}")
 
             action_type = action.get("action")
-            logger.info("Pilot step %d: %s", step + 1, action_type)
+            logger.info("Pilot step %d: %s %s", step + 1, action_type, json.dumps({k: v for k, v in action.items() if k != "action"}))
+
+            # Debug: save Claude's action
+            if _DEBUG:
+                (_DEBUG_DIR / f"step{step:02d}_action.json").write_text(json.dumps(action, indent=2), encoding="utf-8")
 
             actions.append(action)
 
