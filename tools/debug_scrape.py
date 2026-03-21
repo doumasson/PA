@@ -33,11 +33,13 @@ async def main():
 
     institution = sys.argv[1]
 
-    # Load vault to get credentials
+    # Load vault to get credentials — use same path as app.py
     from pa.vault.vault import Vault
     import getpass
 
-    vault = Vault(Path("data"))
+    base_dir = Path(__file__).resolve().parent.parent
+    data_dir = base_dir / "data"
+    vault = Vault(data_dir)
     password = getpass.getpass("Vault password: ")
     await vault.unlock(password)
 
