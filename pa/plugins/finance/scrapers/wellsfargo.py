@@ -35,7 +35,7 @@ class WellsFargoScraper(BaseScraper):
             pass
 
     async def login(self, credentials: dict[str, Any]) -> None:
-        await self._page.goto(self.LOGIN_URL, timeout=60000)
+        await self._page.goto(self.LOGIN_URL, timeout=120000)
         await self._human_delay()
         await self._dump_page("login")
 
@@ -81,7 +81,7 @@ class WellsFargoScraper(BaseScraper):
         if not submit_el:
             raise RuntimeError("Could not find submit button. Check /tmp/wf_login.html")
         await submit_el.click()
-        await self._page.wait_for_load_state("domcontentloaded", timeout=60000)
+        await self._page.wait_for_load_state("domcontentloaded", timeout=120000)
         await self._dump_page("post_login")
 
         if await self._check_mfa():
@@ -92,11 +92,10 @@ class WellsFargoScraper(BaseScraper):
             await self._submit_mfa(code)
 
     async def get_balances(self) -> list[BalanceData]:
-        await self._page.goto(self.ACCOUNTS_URL, wait_until="domcontentloaded", timeout=60000)
+        await self._page.goto(self.ACCOUNTS_URL, wait_until="domcontentloaded", timeout=120000)
         await self._human_delay()
 
-        # Take a screenshot for debugging if needed
-        await self._page.screenshot(path="/tmp/wf_accounts.png")
+        await self._dump_page("accounts")
 
         balances: list[BalanceData] = []
 
@@ -240,7 +239,7 @@ class WellsFargoScraper(BaseScraper):
                 continue
         await self._human_delay()
         await self._page.click('button[type="submit"]')
-        await self._page.wait_for_load_state("domcontentloaded", timeout=60000)
+        await self._page.wait_for_load_state("domcontentloaded", timeout=120000)
 
     async def _find_element(self, selectors: list[str]) -> Any:
         """Try multiple selectors, return the first visible element found."""

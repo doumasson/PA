@@ -68,10 +68,23 @@ async def handle_scrape(ctx: AppContext, update: Any, context: Any) -> str:
     try:
         from playwright.async_api import async_playwright
         async with async_playwright() as pw:
-            browser = await pw.chromium.launch(headless=True)
-            browser_ctx = await browser.new_context(
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+            browser = await pw.chromium.launch(
+                headless=True,
+                args=[
+                    "--disable-gpu",
+                    "--disable-software-rasterizer",
+                    "--no-sandbox",
+                    "--disable-dev-shm-usage",
+                    "--js-flags=--max-old-space-size=256",
+                ],
             )
+            browser_ctx = await browser.new_context(
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                java_script_enabled=True,
+            )
+            # Block heavy resources to speed up page loads on Pi
+            await browser_ctx.route("**/*.{png,jpg,jpeg,gif,svg,woff,woff2,ttf,eot}", lambda route: route.abort())
+            await browser_ctx.route("**/{analytics,tracking,ads,beacon,pixel}**", lambda route: route.abort())
 
             from pa.scrapers.mfa_bridge import MFABridge
             mfa_bridge = ctx.bot._mfa_bridge
