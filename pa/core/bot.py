@@ -160,8 +160,8 @@ class PABot:
             return
         institution = " ".join(context.args) if context.args else None
         if institution:
-            context.user_data["addcred"] = {"institution": institution, "step": "username"}
-            prompt = await update.message.reply_text(f"Username for {institution}:")
+            context.user_data["addcred"] = {"institution": institution, "step": "url"}
+            prompt = await update.message.reply_text(f"Login page URL for {institution}:")
             context.user_data["_addcred_prompt"] = prompt
         else:
             context.user_data["addcred"] = {"step": "institution"}
@@ -174,7 +174,7 @@ class PABot:
         if not self._vault.is_unlocked:
             await update.message.reply_text("Vault is locked. Send /unlock first.")
             return
-        creds = self._vault._data
+        creds = {k: v for k, v in self._vault._data.items() if not k.startswith("_")}
         if not creds:
             await update.message.reply_text("No credentials stored. Use /addcred to add some.")
             return
@@ -242,9 +242,15 @@ class PABot:
 
             if step == "institution":
                 addcred["institution"] = text
+                addcred["step"] = "url"
+                await self._delete_msg(update.message)
+                prompt = await update.effective_chat.send_message(f"Login page URL for {text}:")
+                context.user_data["_addcred_prompt"] = prompt
+            elif step == "url":
+                addcred["url"] = text
                 addcred["step"] = "username"
                 await self._delete_msg(update.message)
-                prompt = await update.effective_chat.send_message(f"Username for {text}:")
+                prompt = await update.effective_chat.send_message(f"Username for {addcred['institution']}:")
                 context.user_data["_addcred_prompt"] = prompt
             elif step == "username":
                 addcred["username"] = text
@@ -258,9 +264,11 @@ class PABot:
                 await self._delete_msg(update.message)
                 institution = addcred["institution"]
                 username = addcred["username"]
+                url = addcred.get("url", "")
                 del context.user_data["addcred"]
                 try:
                     await self._vault.add(institution, {
+                        "url": url,
                         "username": username,
                         "password": text,
                     })
