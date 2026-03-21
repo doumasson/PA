@@ -22,6 +22,15 @@ async def main():
     import os
     os.environ["PA_DEBUG_SCRAPER"] = "1"
 
+    # Load .env file
+    env_path = Path(__file__).resolve().parent.parent / ".env"
+    if env_path.exists():
+        for line in env_path.read_text().splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                key, _, value = line.partition("=")
+                os.environ.setdefault(key.strip(), value.strip())
+
     institution = sys.argv[1]
 
     # Load vault to get credentials
