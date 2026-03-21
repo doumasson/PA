@@ -103,6 +103,74 @@ class Brain:
 
         return response.content[0].text
 
+    async def query_json(
+        self,
+        user_message: str,
+        system_prompt: str,
+        tier: Tier = Tier.STANDARD,
+        image: bytes | None = None,
+        max_tokens: int = 1024,
+    ) -> dict:
+        """Send a query expecting a JSON response. Skips rate limit (infrastructure use)."""
+        model = self.select_model(tier)
+        estimated_cost = _COST_PER_1K_TOKENS[tier] * 2
+        self._cost_tracker.check_budget(estimated_cost)
+
+        if image is not None:
+            import base64
+            content = [
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "image/png",
+                        "data": base64.b64encode(image).decode(),
+                    },
+                },
+                {"type": "text", "text": user_message},
+            ]
+        else:
+            content = user_message
+
+        last_error = None
+        for attempt in range(_MAX_RETRIES):
+            try:
+                response = await self._client.messages.create(
+                    model=model,
+                    max_tokens=max_tokens,
+                    system=system_prompt,
+                    messages=[{"role": "user", "content": content}],
+                )
+                break
+            except Exception as e:
+                last_error = e
+                if attempt < _MAX_RETRIES - 1:
+                    await asyncio.sleep(2 ** attempt)
+        else:
+            raise BrainAPIError(f"Claude API error after {_MAX_RETRIES} retries: {last_error}") from last_error
+
+        total_tokens = response.usage.input_tokens + response.usage.output_tokens
+        actual_cost = (total_tokens / 1000) * _COST_PER_1K_TOKENS[tier]
+        self._cost_tracker.record(actual_cost)
+
+        text = response.content[0].text
+        return self._extract_json(text)
+
+    @staticmethod
+    def _extract_json(text: str) -> dict:
+        """Extract JSON from response text, handling markdown code blocks."""
+        import json as json_mod
+        import re
+        match = re.search(r"```(?:json)?\s*\n?(.*?)\n?```", text, re.DOTALL)
+        if match:
+            return json_mod.loads(match.group(1).strip())
+        stripped = text.strip()
+        start = stripped.find("{")
+        end = stripped.rfind("}")
+        if start != -1 and end != -1:
+            return json_mod.loads(stripped[start : end + 1])
+        raise ValueError(f"No valid JSON found in response: {text[:200]}")
+
     @property
     def cost_tracker(self) -> CostTracker:
         return self._cost_tracker
