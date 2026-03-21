@@ -182,7 +182,14 @@ class PABot:
         lines = ["Stored credentials:\n"]
         for inst, data in sorted(creds.items()):
             username = data.get("username", "?")
-            lines.append(f"  {inst}: {username}")
+            url = data.get("url", "")
+            # Mask username: show first 2 and last 2 chars
+            if len(username) > 4:
+                masked = username[:2] + "*" * (len(username) - 4) + username[-2:]
+            else:
+                masked = "****"
+            url_short = url.split("//")[-1][:30] if url else "no URL"
+            lines.append(f"  {inst}: {masked} ({url_short})")
         await update.message.reply_text("\n".join(lines))
 
     async def _handle_delcred(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
