@@ -1,3 +1,4 @@
+import json
 import os
 from typing import Any
 
@@ -277,6 +278,23 @@ class PABot:
                     )
                 except Exception as e:
                     await update.effective_chat.send_message(f"Error saving: {e}")
+            return
+
+        # MFA relay to scraper subprocess
+        if hasattr(self, '_mfa_subprocess') and self._mfa_subprocess:
+            proc = self._mfa_subprocess
+            code = update.message.text.strip()
+            try:
+                mfa_msg = json.dumps({"event": "mfa_code", "code": code})
+                proc.stdin.write(mfa_msg.encode() + b"\n")
+                await proc.stdin.drain()
+                await update.message.reply_text("MFA code sent. Continuing scrape...")
+            except Exception as e:
+                await update.message.reply_text(f"Failed to relay MFA code: {e}")
+            finally:
+                self._mfa_subprocess = None
+                if hasattr(self, '_mfa_institution'):
+                    self._mfa_institution = None
             return
 
         # MFA relay
