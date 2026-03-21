@@ -39,8 +39,20 @@ async def main():
 
     base_dir = Path(__file__).resolve().parent.parent
     data_dir = base_dir / "data"
+
+    # Debug: show vault location
+    vault_file = data_dir / "vault.enc"
+    params_file = data_dir / "vault.params.json"
+    print(f"Vault dir: {data_dir}")
+    print(f"vault.enc exists: {vault_file.exists()} ({vault_file.stat().st_size if vault_file.exists() else 0} bytes)")
+    print(f"vault.params.json exists: {params_file.exists()}")
+
     vault = Vault(data_dir)
-    password = getpass.getpass("Vault password: ")
+
+    # Use input() instead of getpass to rule out terminal issues
+    password = input("Vault password (visible): ")
+    print(f"Password length: {len(password)}, repr: {repr(password)}")
+
     await vault.unlock(password)
 
     creds = vault.get(institution)
