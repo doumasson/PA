@@ -69,7 +69,6 @@ async def main():
             print(f"  {i+1}. {a.get('action')} -> {a.get('selector', a.get('reason', a.get('prompt', '')))}")
 
     # Show debug files
-    from pathlib import Path
     debug_dir = Path("/tmp/pa_pilot_debug")
     if debug_dir.exists():
         print(f"\nDebug files in {debug_dir}:")
