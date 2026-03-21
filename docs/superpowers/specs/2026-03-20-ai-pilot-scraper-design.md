@@ -39,8 +39,10 @@ Pilot reaches balances → extract data → record new recipe → save cookies �
 **Cost per scrape:**
 - Session still valid: $0.00
 - Recipe replay works: $0.00
-- Recipe breaks, AI re-engages: ~$0.03-0.10
-- First-ever scrape: ~$0.05-0.15
+- Recipe breaks, AI re-engages: ~$0.03-0.15 (higher if vision screenshots needed)
+- First-ever scrape: ~$0.05-0.20
+
+**Concurrency:** Scrape commands are serialized — only one Chromium instance at a time. On a 4GB Pi, two browsers would OOM. A simple asyncio.Lock in the command handler rejects concurrent `/scrape` calls with "scrape already in progress."
 
 ## Component Design
 
@@ -64,12 +66,25 @@ class AIPilot:
         ...
 ```
 
+**ScrapedAccount (new dataclass replacing BalanceData for Pilot output):**
+```python
+@dataclass
+class ScrapedAccount:
+    account_name: str                           # e.g., "CHECKING ····1234"
+    account_type: str                           # checking|savings|credit_card|mortgage|loan
+    balance: float
+    available_credit: float | None = None
+    minimum_payment: float | None = None
+    due_date: str | None = None                 # ISO date
+    statement_balance: float | None = None
+```
+
 **PilotResult:**
 ```python
 @dataclass
 class PilotResult:
     status: Literal["success", "mfa_needed", "login_failed", "max_steps", "error"]
-    balances: list[BalanceData]       # extracted balances (if success)
+    accounts: list[ScrapedAccount]    # extracted accounts (if success)
     actions: list[dict]               # recorded action sequence (for recipe)
     cookies: list[dict]               # browser cookies to persist
     mfa_prompt: str | None            # MFA prompt text (if mfa_needed)
@@ -90,7 +105,7 @@ class PilotResult:
 fill       — type text into a field: {selector, value}
 click      — click an element: {selector}
 screenshot — request visual analysis: {reason}
-wait       — wait for something: {condition, timeout_ms}
+wait       — wait for a selector or URL: {wait_for: "selector"|"url", value: "css-selector or url-pattern", timeout_ms}
 extract    — extract balance data: {balances: [...]}
 mfa        — MFA detected: {prompt}
 fail       — unrecoverable: {reason}
@@ -103,9 +118,19 @@ fail       — unrecoverable: {reason}
 
 **Guardrails:**
 - Max 20 steps per session (prevents infinite loops)
-- If page unchanged after action, Claude is told "nothing happened, try different approach"
-- 30-second timeout per step
+- Page change detection: compare URL + hash of visible text content before/after action. If both unchanged, Claude is told "nothing happened, try different approach"
+- 30-second timeout per step, 5-minute overall session timeout
 - Random 0.5-2s human-like delays between actions
+- Max 3 screenshot requests per session to control vision API costs
+- Login failure cooldown: after 2 consecutive `login_failed` results for an institution, block scraping for 1 hour and alert user (prevents account lockout)
+
+**Brain integration:**
+The Pilot calls `Brain` with a dedicated method `query_json(system_prompt, user_message, image=None)` that:
+- Sends the prompt and expects a JSON response
+- Passes `image` bytes when a screenshot is needed (vision mode)
+- Parses and validates the returned JSON
+- Pilot calls are exempt from the hourly rate limit (scraping is infrastructure, not chat)
+- Uses STANDARD tier (Sonnet) for navigation decisions — good balance of cost and capability
 
 ### 2. Page Analyzer (`pa/scrapers/page_analyzer.py`)
 
@@ -156,29 +181,36 @@ class SessionStore:
 
 Extend the existing recipe engine:
 
-- **Checkpoint hashes:** Each step stores a hash of the expected page state. During replay, if the hash doesn't match, replay aborts at that step and hands off to Pilot.
+- **Checkpoint hashes:** Each step stores a hash of the expected page state (URL path + hash of visible text). During replay, if the hash doesn't match, replay aborts at that step and hands off to Pilot.
 - **Resume point:** When handing off to Pilot, pass the step index so Pilot knows what's already been done.
-- **Versioning:** Keep up to 3 recipe versions per institution. On Pilot re-engagement, old recipe preserved, new one saved alongside. Oldest version pruned.
+- **Versioning:** Keep up to 3 recipe versions per institution. On Pilot re-engagement, old recipe preserved, new one saved alongside. Oldest version pruned. Old versions are not retried automatically — they exist for manual rollback.
 - **Schema update:** Bump to version 2 with checkpoint fields.
+
+**Replay executor:** `RecipeEngine.replay(name, page, credentials)` executes stored steps sequentially via Playwright:
+- `fill` → `page.fill(selector, resolved_value)`
+- `click` → `page.click(selector)`
+- `wait` → `page.wait_for_selector(selector)` or `page.wait_for_url(pattern)`
+- Before each step, verify checkpoint hash. On mismatch, return `(False, step_index)` so the caller can hand off to Pilot at that point.
+- On Playwright error (selector not found, timeout), return `(False, step_index)`.
+- On success, return `(True, None)`.
 
 ### 5. MFA Bridge Updates (`pa/scrapers/mfa_bridge.py`)
 
-Enable MFA in subprocess model:
+The existing in-process `MFABridge` class (asyncio.Event-based) is **replaced** by a subprocess-compatible protocol. The old class is removed.
 
-- Subprocess communicates MFA state via stdout JSON protocol
-- Main bot process reads subprocess stdout, detects `mfa_needed` message
-- Bot sends Telegram message to user with MFA prompt
-- User replies with code
-- Bot writes code to subprocess stdin (or a temp file the subprocess watches)
-- Subprocess reads code, Pilot enters it, continues scraping
-- Timeout: 5 minutes for user to provide code
-
-**Subprocess protocol:**
+**Subprocess stdin/stdout protocol:**
 ```
 Subprocess → Bot:    {"event": "mfa_needed", "prompt": "Enter code sent to ***-1234"}
 Bot → Subprocess:    {"event": "mfa_code", "code": "123456"}
+Subprocess → Bot:    {"event": "progress", "message": "Logged in, finding balances..."}
 Subprocess → Bot:    {"event": "complete", "result": {...}}
 ```
+
+- Bot reads subprocess stdout line by line (each line is one JSON message)
+- On `mfa_needed`: bot sends Telegram message, waits for user reply (5 min timeout), writes code to subprocess stdin
+- On `progress`: bot can optionally forward status to user
+- On `complete`: bot processes the final result
+- Subprocess uses `sys.stdin.readline()` to block waiting for MFA code
 
 ### 6. Scraper Runner Updates (`pa/plugins/finance/scraper_runner.py`)
 
@@ -218,6 +250,8 @@ URL: https://mybank.com/login
 Username: user123
 Password: pass456
 ```
+
+The URL is stored as part of the credential dict in the vault (`{"url": "...", "username": "...", "password": "..."}`). The Pilot reads the URL from the credential entry — no separate institution registry needed. The existing `/addcred` command is updated to prompt for URL as the first field.
 
 **Scraping:**
 ```
@@ -288,7 +322,10 @@ Rules:
 ## Security Considerations
 
 - Credentials never sent to Claude — only `$cred.*` placeholders
+- **Credentials passed to subprocess via stdin** (not command-line args, which are visible in `ps aux`)
 - Cookies encrypted at rest via vault
 - Recipe steps never contain real credential values
-- Screenshot images processed in memory, never saved to disk (except debug mode on Pi)
+- Screenshot images processed in memory, never saved to disk unless `PA_DEBUG_SCRAPER=1` env var is set
+- Post-login HTML sent to Claude may contain account numbers or partial PII — this is inherent to the approach and acceptable for a personal single-user system
 - Subprocess inherits vault unlock state, cannot access other institutions' credentials
+- Anti-bot detection: some banks may block headless Chromium. The Pilot uses a realistic user-agent and human-like delays, but cannot guarantee bypass. If a bank consistently blocks, the `fail` action reports this to the user
