@@ -167,8 +167,51 @@ class Brain:
         if use_conversation:
             await self.remember_message("user", user_message)
             await self.remember_message("assistant", result)
+            # Self-teaching: detect preferences and corrections
+            await self._detect_preference(user_message)
 
         return result
+
+    async def _detect_preference(self, message: str) -> None:
+        """Auto-detect user preferences and corrections from messages."""
+        ml = message.lower()
+        # Correction patterns
+        correction_phrases = [
+            "don't ", "dont ", "stop ", "never ", "quit ",
+            "i don't want", "i dont want", "i don't care", "i dont care",
+            "i don't need", "i dont need", "not interested in",
+            "too many", "too much", "annoying", "stop sending",
+            "i prefer", "i like", "i want", "always ", "make sure",
+            "remember that", "keep in mind", "from now on",
+        ]
+        if any(phrase in ml for phrase in correction_phrases):
+            # Save the preference directly — it's cheap, no API call needed
+            await self.learn_preference(message.strip()[:200], learned_from="auto_detected")
+
+    async def log_error(self, source: str, error: Exception) -> None:
+        """Self-healing: log errors to DB for tracking and pattern detection."""
+        if not self._store:
+            return
+        try:
+            error_type = type(error).__name__
+            msg = str(error)[:500]
+            # Check if we've seen this before
+            existing = await self._store.fetchone(
+                "SELECT id, count FROM core_errors WHERE source = ? AND error_type = ? AND resolved = 0",
+                (source, error_type)
+            )
+            if existing:
+                await self._store.execute(
+                    "UPDATE core_errors SET count = count + 1, last_seen = CURRENT_TIMESTAMP, message = ? WHERE id = ?",
+                    (msg, existing['id'])
+                )
+            else:
+                await self._store.execute(
+                    "INSERT INTO core_errors (source, error_type, message) VALUES (?, ?, ?)",
+                    (source, error_type, msg)
+                )
+        except Exception:
+            pass
 
     async def query_json(
         self,

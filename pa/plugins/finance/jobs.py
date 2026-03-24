@@ -1,12 +1,32 @@
-"""Finance scheduled jobs — autonomous financial monitoring."""
+"""Finance scheduled jobs — autonomous financial monitoring with self-healing."""
+import asyncio
 from pa.plugins import Job
+
+
+async def _retry(coro_fn, ctx, max_retries=3, source="finance"):
+    """Self-healing retry wrapper. Logs errors, retries with backoff."""
+    last_error = None
+    for attempt in range(max_retries):
+        try:
+            return await coro_fn()
+        except Exception as e:
+            last_error = e
+            await ctx.brain.log_error(source, e)
+            if attempt < max_retries - 1:
+                await asyncio.sleep(2 ** attempt)
+    # Final failure — notify user
+    try:
+        await ctx.bot.send_message(f"Job {source} failed after {max_retries} retries: {last_error}")
+    except Exception:
+        pass
+    return None
 
 
 async def detect_recurring_payments(ctx) -> None:
     """Analyze transactions to auto-detect recurring payments, subscriptions, and income."""
     from pa.plugins.finance.repository import FinanceRepository
     from pa.core.tier import Tier
-    import datetime, json
+    import datetime, json, re
 
     repo = FinanceRepository(ctx.store)
     since = (datetime.date.today() - datetime.timedelta(days=60)).isoformat()
@@ -23,13 +43,14 @@ async def detect_recurring_payments(ctx) -> None:
 
     SYSTEM = """Analyze these bank transactions and identify:
 1. Recurring monthly payments (mortgage, rent, utilities, subscriptions, insurance)
-2. Subscriptions (streaming, apps, memberships — even small ones)
-3. Regular income deposits
+2. Subscriptions (streaming, apps, memberships — even small ones like $5.99)
+3. Regular income deposits (look at credits/deposits)
 Return ONLY JSON:
 {
   "recurring_payments": [{"description": "...", "amount": 0.00, "frequency": "monthly", "category": "mortgage|utility|subscription|insurance|other", "likely_institution": "...", "cancellable": true|false}],
   "subscriptions": [{"description": "...", "amount": 0.00, "frequency": "monthly", "service": "..."}],
-  "income_sources": [{"description": "...", "amount": 0.00, "frequency": "biweekly|monthly|irregular"}]
+  "income_sources": [{"description": "...", "amount": 0.00, "frequency": "biweekly|monthly|irregular"}],
+  "spending_concerns": ["list of specific spending patterns that seem high or wasteful"]
 }"""
 
     try:
@@ -46,7 +67,6 @@ Return ONLY JSON:
         end = text.rfind('}')
         if start == -1:
             return
-        import re
         text = re.sub(r',\s*([}\]])', r'\1', text[start:end+1])
         data = json.loads(text)
 
@@ -54,6 +74,7 @@ Return ONLY JSON:
         recurring = data.get('recurring_payments', [])
         subscriptions = data.get('subscriptions', [])
         income = data.get('income_sources', [])
+        concerns = data.get('spending_concerns', [])
 
         # Find mortgage
         mortgage = next((p for p in recurring if p.get('category') == 'mortgage'), None)
@@ -61,7 +82,7 @@ Return ONLY JSON:
             await save_profile(ctx, 'mortgage_payment', mortgage['amount'])
             await save_profile(ctx, 'mortgage_description', mortgage['description'])
 
-        # Save estimated monthly income
+        # Monthly income estimate
         if income:
             monthly_income = sum(
                 i['amount'] * (2 if i.get('frequency') == 'biweekly' else 1)
@@ -73,58 +94,54 @@ Return ONLY JSON:
         await save_profile(ctx, 'recurring_payments', recurring)
         await save_profile(ctx, 'subscriptions', subscriptions)
         await save_profile(ctx, 'income_sources', income)
+        await save_profile(ctx, 'spending_concerns', concerns)
         await save_profile(ctx, 'recurring_updated', datetime.date.today().isoformat())
 
     except Exception as e:
-        print(f"Recurring payment detection error: {e}")
+        await ctx.brain.log_error("detect_recurring", e)
 
 
 async def job_morning_sync(ctx) -> None:
     """Every morning — sync accounts, send summary."""
     if not ctx.vault.is_unlocked:
         return
-    try:
+
+    async def _do_sync():
         from pa.plugins.teller.sync import sync_teller_accounts, get_yesterday_summary
         await sync_teller_accounts(ctx)
-        # Detect recurring payments weekly (Monday)
         import datetime
         if datetime.date.today().weekday() == 0:
             await detect_recurring_payments(ctx)
         summary = await get_yesterday_summary(ctx)
         if summary:
             await ctx.bot.send_message(summary)
-    except Exception as e:
-        print(f"Morning sync error: {e}")
+
+    await _retry(_do_sync, ctx, source="morning_sync")
 
 
 async def job_weekly_advisor(ctx) -> None:
     """Sunday morning — full pull: Teller sync + Gmail bill scan + advisor analysis."""
     if not ctx.vault.is_unlocked:
         return
-    try:
+
+    async def _do_weekly():
         from pa.plugins.teller.sync import sync_teller_accounts
         from pa.plugins.finance.advisor import run_advisor
 
-        # 1. Sync all bank accounts
-        results = await sync_teller_accounts(ctx)
-        sync_msg = "\n".join(results) if results else "No accounts synced"
-
-        # 2. Detect recurring payments & subscriptions
+        await sync_teller_accounts(ctx)
         await detect_recurring_payments(ctx)
-
-        # 3. Run full advisor WITH Gmail bill scan
         result = await run_advisor(ctx, include_gmail=True)
-
         await ctx.bot.send_message(f"Weekly Financial Report\n\n{result}")
-    except Exception as e:
-        await ctx.bot.send_message(f"Weekly advisor error: {e}")
+
+    await _retry(_do_weekly, ctx, source="weekly_advisor")
 
 
 async def job_balance_check(ctx) -> None:
     """Every 4 hours — sync balance, alert if low."""
     if not ctx.vault.is_unlocked:
         return
-    try:
+
+    async def _do_check():
         from pa.plugins.teller.sync import sync_teller_accounts
         from pa.plugins.finance.repository import FinanceRepository
         await sync_teller_accounts(ctx, institutions=['wellsfargo'])
@@ -135,17 +152,18 @@ async def job_balance_check(ctx) -> None:
             if acct['balance'] < 200:
                 await ctx.bot.send_message(
                     f"Low balance: {acct['institution']} {acct['name']} "
-                    f"is at ${acct['balance']:,.2f}"
+                    f"at ${acct['balance']:,.2f}"
                 )
-    except Exception as e:
-        print(f"Balance check error: {e}")
+
+    await _retry(_do_check, ctx, source="balance_check")
 
 
 async def job_due_date_check(ctx) -> None:
     """Daily — check for bills due in next 3 days."""
     if not ctx.vault.is_unlocked:
         return
-    try:
+
+    async def _do_due():
         import datetime
         from pa.plugins.finance.repository import FinanceRepository
         repo = FinanceRepository(ctx.store)
@@ -168,8 +186,8 @@ async def job_due_date_check(ctx) -> None:
             await ctx.bot.send_message(
                 "Bills due soon:\n" + "\n".join(urgent)
             )
-    except Exception as e:
-        print(f"Due date check error: {e}")
+
+    await _retry(_do_due, ctx, source="due_date_check")
 
 
 def get_finance_jobs() -> list[Job]:

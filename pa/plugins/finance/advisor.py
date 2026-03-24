@@ -221,9 +221,19 @@ async def get_financial_profile(ctx, include_gmail: bool = False) -> dict:
             balances = await repo.get_latest_balances()
             all_debts = [b for b in balances if b['type'] in ('credit_card', 'credit', 'loan', 'mortgage')]
 
-    # Save estimates
+    # Self-teaching: save estimates and track month-over-month
     if income_estimate > 0:
         await save_profile(ctx, 'income_estimate', income_estimate)
+    if spending_estimate > 0:
+        await save_profile(ctx, 'spending_estimate', spending_estimate)
+        # Track monthly spending history for trend detection
+        history = memory.get('spending_history', [])
+        today = datetime.date.today().isoformat()
+        # Only add if we haven't already logged today
+        if not history or history[-1].get('date') != today:
+            history.append({'date': today, 'amount': spending_estimate})
+            history = history[-12:]  # Keep last 12 data points
+            await save_profile(ctx, 'spending_history', history)
 
     return {
         'checking_accounts': [b for b in balances if b['type'] in ('checking', 'savings', 'depository')],
@@ -298,8 +308,28 @@ async def build_financial_summary(profile: dict) -> str:
             for t in debits[:15]:
                 lines.append(f"  {t['date']} {t['description'][:40]}: ${t['amount']:,.2f}")
 
-    # Recurring payments from memory
+    # Spending trend (self-teaching: tracks month over month)
     memory = profile.get('memory', {})
+    spending_history = memory.get('spending_history', [])
+    if len(spending_history) >= 2:
+        lines.append("\nSPENDING TREND:")
+        for entry in spending_history[-6:]:
+            lines.append(f"  {entry['date']}: ${entry['amount']:,.2f}")
+        prev = spending_history[-2]['amount']
+        curr = spending_history[-1]['amount']
+        if prev > 0:
+            change_pct = ((curr - prev) / prev) * 100
+            direction = "UP" if change_pct > 0 else "DOWN"
+            lines.append(f"  Change: {direction} {abs(change_pct):.1f}%")
+
+    # Spending concerns from recurring detection
+    concerns = memory.get('spending_concerns', [])
+    if concerns:
+        lines.append("\nSPENDING CONCERNS (auto-detected):")
+        for c in concerns:
+            lines.append(f"  - {c}")
+
+    # Recurring payments from memory
     recurring = memory.get('recurring_payments', [])
     if recurring:
         lines.append("\nDETECTED RECURRING PAYMENTS:")
