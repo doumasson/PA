@@ -13,7 +13,7 @@ For each email return:
 
 Rules:
 - noise = promotions, newsletters, marketing, social media, automated receipts under $100
-- action = needs Shane's response or decision
+- action = needs Steven's response or decision
 - event = has specific date/time (sports, appointments, school events)
 - important = useful info but no action needed (large transactions, shipping, account alerts)
 - notify = true only for: action+high, any event, important+high

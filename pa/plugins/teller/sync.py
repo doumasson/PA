@@ -78,7 +78,7 @@ async def get_spending_by_merchant(ctx, merchant, days=30):
     total = sum(t['amount'] for t in matches)
     lines = "\n".join(f"  {t['date']}: ${t['amount']:,.2f}" for t in matches)
     from pa.core.tier import Tier
-    prompt = f"Shane asked about spending at '{merchant}' over {days} days.\nFound {len(matches)} transactions totaling ${total:,.2f}:\n{lines}\nGive a brief Dumbledore-style summary. Be honest if the amount is concerning."
+    prompt = f"Steven asked about spending at '{merchant}' over {days} days.\nFound {len(matches)} transactions totaling ${total:,.2f}:\n{lines}\nGive a brief Dumbledore-style summary. Be honest if the amount is concerning."
     return await ctx.brain.query(prompt, tier=Tier.FAST)
 
 
@@ -96,7 +96,7 @@ async def get_weekly_spending_summary(ctx):
     )
     from pa.core.tier import Tier
     prompt = (
-        f"Analyze Shane's spending for the past 7 days. Total: ${total:,.2f}\n\n"
+        f"Analyze Steven's spending for the past 7 days. Total: ${total:,.2f}\n\n"
         f"Transactions:\n{txn_list}\n\n"
         f"1. Categorize transactions (Food/Dining, Groceries, Subscriptions, Entertainment, Bills/Utilities, Shopping, Transfer/Income, Other)\n"
         f"2. For obscure merchant names, use your knowledge to identify what they are\n"
@@ -125,5 +125,5 @@ async def get_yesterday_summary(ctx):
     else:
         txn_str = "No spending yesterday."
     from pa.core.tier import Tier
-    prompt = f"Give Shane a brief friendly morning financial update.\n\nWells Fargo balances:\n{balance_str}\n\n{txn_str}\n\nKeep it to 3-4 sentences. Speak like Dumbledore. Flag anything concerning."
+    prompt = f"Give Steven a brief friendly morning financial update.\n\nWells Fargo balances:\n{balance_str}\n\n{txn_str}\n\nKeep it to 3-4 sentences. Speak like Dumbledore. Flag anything concerning."
     return await ctx.brain.query(prompt, tier=Tier.FAST)

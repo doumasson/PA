@@ -27,7 +27,7 @@ async def check_gmail(ctx) -> None:
         return
 
     # One batch Haiku call - classify AND extract financial data simultaneously
-    COMBINED_SYSTEM = """You are an email assistant for Steve Hemenover, a busy dad with two sons Maddox (12) and Asher (10).
+    COMBINED_SYSTEM = """You are an email assistant for Steven Hemenover, a busy dad with two sons Maddox (12) and Asher (10).
 
 For each email return a JSON object in an array:
 {
