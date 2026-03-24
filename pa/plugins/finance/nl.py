@@ -10,6 +10,31 @@ async def handle_finance_nl(ctx: AppContext, text: str, update: Update) -> str:
     tl = text.lower()
     repo = FinanceRepository(ctx.store)
 
+    # Merchant category corrections: "X is a Y" or "X is not Y"
+    if any(phrase in tl for phrase in [
+        " is a ", " is an ", " is not ", " isn't ", " isnt ",
+        "categorize ", "that's actually", "thats actually",
+    ]):
+        from pa.plugins.finance.merchants import learn_category
+        # Use Haiku to parse the correction
+        PARSE = """Parse this merchant categorization correction. Return ONLY JSON:
+{"merchant":"merchant name","category":"correct category","action":"set"|"unclear"}
+If unclear: {"action":"unclear"}. Raw JSON only."""
+        result = await ctx.brain.query(text, system_prompt=PARSE, tier=Tier.FAST, use_conversation=False)
+        try:
+            import json, re
+            result = re.sub(r',\s*([}\]])', r'\1', result.strip())
+            start = result.find('{')
+            end = result.rfind('}')
+            if start != -1:
+                data = json.loads(result[start:end+1])
+                if data.get('action') == 'set' and data.get('merchant') and data.get('category'):
+                    await learn_category(ctx.store, data['merchant'], data['category'], source="user")
+                    return f"Got it — '{data['merchant']}' is now categorized as '{data['category']}'. I'll remember that."
+        except Exception:
+            pass
+        return "I couldn't parse that correction. Try: 'Hilltop Liquors is a liquor store' or 'Cleo is a cash advance app'"
+
     # Manual payment/balance updates
     if any(phrase in tl for phrase in [
         "i paid", "i just paid", "paid off", "made a payment",

@@ -1,5 +1,7 @@
 import asyncio
+import json
 import os
+import subprocess
 import time
 from collections import deque
 from typing import Any
@@ -212,6 +214,49 @@ class Brain:
                 )
         except Exception:
             pass
+
+    async def query_subscription(self, prompt: str, system_prompt: str = "") -> str:
+        """Route a query through Claude Code CLI using the user's subscription.
+        Use this for heavy analysis (financial advisor, complex categorization)
+        where quality matters more than speed. FREE — no API cost."""
+        full_prompt = f"{system_prompt}\n\n{prompt}" if system_prompt else prompt
+        try:
+            result = await asyncio.to_thread(
+                self._run_claude_cli, full_prompt
+            )
+            return result
+        except Exception as e:
+            # Fall back to API if CLI not available
+            return await self.query(
+                prompt, system_prompt=system_prompt or None,
+                tier=Tier.STANDARD, use_conversation=False,
+            )
+
+    @staticmethod
+    def _run_claude_cli(prompt: str) -> str:
+        """Synchronous Claude Code CLI call."""
+        extra_paths = [
+            os.path.expanduser("~/.local/bin"),
+            os.path.expanduser("~/.npm-global/bin"),
+        ]
+        env = os.environ.copy()
+        for p in extra_paths:
+            if p not in env.get("PATH", ""):
+                env["PATH"] = p + os.pathsep + env.get("PATH", "")
+
+        try:
+            result = subprocess.run(
+                ["claude", "-p", prompt, "--output-format", "json"],
+                capture_output=True, text=True, timeout=300, env=env,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                data = json.loads(result.stdout)
+                return data.get("result", result.stdout)
+            return result.stdout or result.stderr
+        except FileNotFoundError:
+            raise BrainAPIError("Claude CLI not found — install Claude Code")
+        except subprocess.TimeoutExpired:
+            raise BrainAPIError("Claude CLI timed out (5 min)")
 
     async def query_json(
         self,

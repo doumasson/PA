@@ -194,6 +194,10 @@ async def get_financial_profile(ctx, include_gmail: bool = False) -> dict:
     since = (datetime.date.today() - datetime.timedelta(days=30)).isoformat()
     txns = await repo.get_transactions(since_date=since, limit=200)
 
+    # Categorize transactions using the learning system
+    from pa.plugins.finance.merchants import categorize_transactions
+    txns = await categorize_transactions(ctx.store, txns)
+
     # Income = deposits (negative amounts in Teller = money coming in)
     credits = [t for t in txns if t['amount'] < 0]
     income_estimate = abs(sum(t['amount'] for t in credits))
@@ -299,14 +303,32 @@ async def build_financial_summary(profile: dict) -> str:
             surplus = income_val - spending
             lines.append(f"SURPLUS/DEFICIT: ${surplus:,.2f}")
 
-    # Spending breakdown by category
+    # Spending breakdown by LEARNED category
     if profile['recent_transactions']:
         debits = [t for t in profile['recent_transactions'] if t['amount'] > 0]
         if debits:
-            lines.append("\nRECENT SPENDING (last 30 days):")
-            # Group by description similarity
-            for t in debits[:15]:
-                lines.append(f"  {t['date']} {t['description'][:40]}: ${t['amount']:,.2f}")
+            # Group by learned category
+            by_cat = {}
+            uncategorized = []
+            for t in debits:
+                cat = t.get('learned_category')
+                if cat:
+                    by_cat.setdefault(cat, []).append(t)
+                else:
+                    uncategorized.append(t)
+
+            if by_cat:
+                lines.append("\nSPENDING BY CATEGORY (last 30 days):")
+                for cat in sorted(by_cat.keys(), key=lambda c: sum(t['amount'] for t in by_cat[c]), reverse=True):
+                    total_cat = sum(t['amount'] for t in by_cat[cat])
+                    lines.append(f"  {cat}: ${total_cat:,.2f} ({len(by_cat[cat])} transactions)")
+                    for t in by_cat[cat][:3]:
+                        lines.append(f"    {t['date']} {t['description'][:35]}: ${t['amount']:,.2f}")
+
+            if uncategorized:
+                lines.append(f"\n  UNCATEGORIZED ({len(uncategorized)} transactions):")
+                for t in uncategorized[:10]:
+                    lines.append(f"    {t['date']} {t['description'][:35]}: ${t['amount']:,.2f}")
 
     # Spending trend (self-teaching: tracks month over month)
     memory = profile.get('memory', {})
@@ -377,10 +399,8 @@ async def run_advisor(ctx, user_question: str = None, include_gmail: bool = Fals
             "7. DATA GAPS: What info do you still need? Ask ONE specific question.\n"
         )
 
-    result = await ctx.brain.query(
-        prompt, system_prompt=ADVISOR_SYSTEM,
-        tier=Tier.STANDARD, use_conversation=False,
-    )
+    # Use Claude subscription (CLI) for the heavy analysis — free, better quality
+    result = await ctx.brain.query_subscription(prompt, system_prompt=ADVISOR_SYSTEM)
 
     # Save to memory
     await save_profile(ctx, 'last_advice_summary', result[:500])

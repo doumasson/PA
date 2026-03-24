@@ -55,6 +55,7 @@ class FinancePlugin(PluginBase):
         ]
         return [
             NLHandler(keywords=advisor_keywords, handler=handle_advisor_nl, priority=20),
+            NLHandler(keywords=["is a ", "is an ", "is not ", "categorize ", "that's actually", "isnt a"], handler=handle_finance_nl, priority=18),
             NLHandler(keywords=["i paid", "i just paid", "paid off", "made a payment", "balance is now", "new balance"], handler=handle_finance_nl, priority=15),
             NLHandler(keywords=["balance", "how much", "account", "checking", "savings", "credit card"], handler=handle_finance_nl, priority=10),
             NLHandler(keywords=["debt", "owe", "loan", "payoff"], handler=handle_finance_nl, priority=10),
