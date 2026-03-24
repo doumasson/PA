@@ -34,6 +34,9 @@ async def main() -> None:
     await store.connect()
     await store.init_schema()
 
+    # Load persisted state into brain (conversation memory, cost tracker, preferences)
+    await brain.load_from_db(store)
+
     bot = PABot(
         config=config, vault=vault, store=store,
         brain=brain, mfa_bridge=mfa_bridge,

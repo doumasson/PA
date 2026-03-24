@@ -42,22 +42,47 @@ async def classify_emails_batch(emails: list[dict], brain, system_override: str 
         msg = f"Classify these {len(batch)} emails as a JSON array:\n\n{email_list}"
 
         try:
-            text = await brain.query(msg, system_prompt=system_override or SYSTEM, tier=Tier.FAST)
+            text = await brain.query(
+                msg, system_prompt=system_override or SYSTEM,
+                tier=Tier.FAST, use_conversation=False,
+            )
             text = text.strip()
             # Strip any markdown fences
             if '```' in text:
-                text = text.split('```')[1]
-                if text.startswith('json'):
-                    text = text[4:]
-                text = text.strip()
+                parts = text.split('```')
+                for part in parts[1:]:
+                    if part.strip().startswith('json'):
+                        text = part.strip()[4:].strip()
+                        break
+                    elif part.strip().startswith('['):
+                        text = part.strip()
+                        break
             # Find the JSON array
             start = text.find('[')
             end = text.rfind(']')
             if start != -1 and end != -1:
                 text = text[start:end+1]
+            # Fix common JSON issues from LLM output
+            text = text.replace(',]', ']').replace(',}', '}')
+            # Try to fix trailing commas and missing quotes
+            import re
+            text = re.sub(r',\s*([}\]])', r'\1', text)
             results = json.loads(text)
             if isinstance(results, list):
                 all_results.extend(results)
+        except json.JSONDecodeError as e:
+            print(f"Triage batch {i//batch_size} JSON error: {e}")
+            # Try individual email fallback
+            for email in batch:
+                all_results.append({
+                    "id": email["id"],
+                    "category": "noise",
+                    "urgency": "low",
+                    "summary": email.get("subject", "")[:50],
+                    "notify": False,
+                    "calendar_event": None,
+                })
+            continue
         except Exception as e:
             print(f"Triage batch {i//batch_size} error: {e}")
             continue

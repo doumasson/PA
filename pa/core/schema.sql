@@ -1,3 +1,37 @@
+-- Core key-value state (cost tracking, preferences, etc.)
+CREATE TABLE IF NOT EXISTS core_state (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+
+-- Conversation memory for context across messages
+CREATE TABLE IF NOT EXISTS core_conversations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    role TEXT NOT NULL,
+    content TEXT NOT NULL,
+    timestamp TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- User preferences learned from interactions
+CREATE TABLE IF NOT EXISTS core_preferences (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    preference TEXT NOT NULL,
+    learned_from TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Self-healing: error tracking
+CREATE TABLE IF NOT EXISTS core_errors (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source TEXT NOT NULL,
+    error_type TEXT NOT NULL,
+    message TEXT NOT NULL,
+    count INTEGER NOT NULL DEFAULT 1,
+    first_seen TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    last_seen TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    resolved INTEGER NOT NULL DEFAULT 0
+);
+
 CREATE TABLE IF NOT EXISTS recipes (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     plugin TEXT NOT NULL,

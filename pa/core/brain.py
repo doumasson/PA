@@ -37,9 +37,57 @@ class Brain:
         )
         self._query_timestamps: deque[float] = deque()
         self._plugin_fragments: list[str] = []
+        self._store = None
+        self._conversation: list[dict] = []
+        self._conv_max = 20  # sliding window
+        self._preferences: list[str] = []
+
+    def set_store(self, store) -> None:
+        self._store = store
 
     def set_plugin_fragments(self, fragments: list[str]) -> None:
         self._plugin_fragments = fragments
+
+    async def load_from_db(self, store) -> None:
+        """Load conversation history and preferences from DB."""
+        self._store = store
+        await self._cost_tracker.load_from_db(store)
+        # Load recent conversation
+        rows = await store.fetchall(
+            "SELECT role, content FROM core_conversations ORDER BY id DESC LIMIT ?",
+            (self._conv_max,)
+        )
+        self._conversation = [{"role": r["role"], "content": r["content"]} for r in reversed(rows)]
+        # Load preferences
+        rows = await store.fetchall(
+            "SELECT preference FROM core_preferences ORDER BY id DESC LIMIT 50"
+        )
+        self._preferences = [r["preference"] for r in rows]
+
+    async def remember_message(self, role: str, content: str) -> None:
+        """Add a message to conversation memory."""
+        self._conversation.append({"role": role, "content": content})
+        if len(self._conversation) > self._conv_max:
+            self._conversation = self._conversation[-self._conv_max:]
+        if self._store:
+            await self._store.execute(
+                "INSERT INTO core_conversations (role, content) VALUES (?, ?)",
+                (role, content[:2000])
+            )
+            # Prune old messages (keep last 50)
+            await self._store.execute(
+                """DELETE FROM core_conversations WHERE id NOT IN
+                   (SELECT id FROM core_conversations ORDER BY id DESC LIMIT 50)"""
+            )
+
+    async def learn_preference(self, preference: str, learned_from: str = "") -> None:
+        """Save a user preference for future reference."""
+        self._preferences.append(preference)
+        if self._store:
+            await self._store.execute(
+                "INSERT INTO core_preferences (preference, learned_from) VALUES (?, ?)",
+                (preference, learned_from)
+            )
 
     def _check_rate_limit(self) -> None:
         now = time.monotonic()
@@ -57,11 +105,15 @@ class Brain:
         frags = plugin_fragments if plugin_fragments is not None else self._plugin_fragments
         parts = [PERSONA]
         parts.extend(frags)
+        if self._preferences:
+            pref_text = "\n".join(f"- {p}" for p in self._preferences[-10:])
+            parts.append(f"User preferences (learned over time):\n{pref_text}")
         parts.append(
             "Rules:\n"
             "- Be direct and actionable\n"
             "- Reference specific data when available\n"
-            "- If asked about something not in your data, say so"
+            "- If asked about something not in your data, say so\n"
+            "- If the user corrects you or states a preference, acknowledge it"
         )
         return "\n\n".join(parts)
 
@@ -69,7 +121,8 @@ class Brain:
         self,
         user_message: str,
         system_prompt: str | None = None,
-        tier: Tier = Tier.STANDARD,
+        tier: Tier = Tier.FAST,
+        use_conversation: bool = True,
     ) -> str:
         self._check_rate_limit()
         model = self.select_model(tier)
@@ -78,6 +131,13 @@ class Brain:
         estimated_cost = _COST_PER_1K_TOKENS[tier] * 2
         self._cost_tracker.check_budget(estimated_cost)
 
+        # Build messages with conversation history
+        if use_conversation and self._conversation:
+            messages = list(self._conversation[-10:])
+            messages.append({"role": "user", "content": user_message})
+        else:
+            messages = [{"role": "user", "content": user_message}]
+
         last_error = None
         for attempt in range(_MAX_RETRIES):
             try:
@@ -85,7 +145,7 @@ class Brain:
                     model=model,
                     max_tokens=1024,
                     system=prompt,
-                    messages=[{"role": "user", "content": user_message}],
+                    messages=messages,
                 )
                 break
             except Exception as e:
@@ -101,7 +161,14 @@ class Brain:
         actual_cost = (total_tokens / 1000) * _COST_PER_1K_TOKENS[tier]
         self._cost_tracker.record(actual_cost)
 
-        return response.content[0].text
+        result = response.content[0].text
+
+        # Remember this exchange
+        if use_conversation:
+            await self.remember_message("user", user_message)
+            await self.remember_message("assistant", result)
+
+        return result
 
     async def query_json(
         self,

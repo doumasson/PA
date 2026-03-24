@@ -12,6 +12,9 @@ venv/
 vault.enc
 *.key
 .env
+config.json
+data/
+vault.params.json
 
 # Database
 *.db
