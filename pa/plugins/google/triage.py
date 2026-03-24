@@ -35,10 +35,13 @@ async def classify_emails_batch(emails: list[dict], brain, system_override: str 
 
     for i in range(0, len(emails), batch_size):
         batch = emails[i:i + batch_size]
-        email_list = "\n\n".join(
-            f'ID:{e["id"]}\nFrom:{e["sender"]}\nSubject:{e["subject"]}\nPreview:{e["snippet"]}'
-            for e in batch
-        )
+        def _format_email(e):
+            lines = f'ID:{e["id"]}\nFrom:{e["sender"]}\nSubject:{e["subject"]}\nPreview:{e["snippet"]}'
+            if e.get('body'):
+                lines += f'\nBody (excerpt):{e["body"][:1500]}'
+            return lines
+
+        email_list = "\n\n".join(_format_email(e) for e in batch)
         msg = f"Classify these {len(batch)} emails as a JSON array:\n\n{email_list}"
 
         try:
