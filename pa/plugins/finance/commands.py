@@ -7,8 +7,8 @@ from typing import Any
 from pa.plugins import AppContext
 from pa.plugins.finance.repository import FinanceRepository
 from pa.plugins.finance.formatters import (
-    format_balance_summary, format_debt_summary, format_due_summary,
-    format_spending_summary, format_trend_summary,
+    format_balance_summary, format_bills_summary, format_debt_summary,
+    format_due_summary, format_spending_summary, format_trend_summary,
 )
 
 _scrape_lock = asyncio.Lock()
@@ -260,6 +260,68 @@ async def handle_scrape(ctx: AppContext, update: Any, context: Any) -> str:
             return f"Scrape of {institution} failed: {e}"
 
 
+async def handle_forecast(ctx: AppContext, update: Any, context: Any) -> str:
+    """Cash flow forecast for the next 14 days."""
+    import datetime
+
+    repo = _repo(ctx)
+
+    # Get checking balance
+    balances = await repo.get_latest_balances()
+    checking = [b for b in balances if b['type'] in ('checking', 'depository')]
+    if not checking:
+        return "No checking account data. Use /sync first."
+    checking_balance = sum(b['balance'] for b in checking)
+
+    # Get unpaid bills due in the next 14 days
+    today = datetime.date.today()
+    cutoff = (today + datetime.timedelta(days=14)).isoformat()
+    upcoming_bills = await ctx.store.fetchall(
+        "SELECT name, amount, due_date FROM finance_bills "
+        "WHERE paid_this_cycle = 0 AND due_date IS NOT NULL AND due_date <= ? "
+        "ORDER BY due_date",
+        (cutoff,),
+    )
+    total_bills = sum(b['amount'] or 0 for b in upcoming_bills)
+
+    # Average daily spending from last 30 days
+    since_30 = (today - datetime.timedelta(days=30)).isoformat()
+    txns = await repo.get_transactions(since_date=since_30, limit=1000)
+    debits = [t for t in txns if t['amount'] > 0]
+    total_spent_30 = sum(t['amount'] for t in debits)
+    avg_daily = total_spent_30 / 30 if debits else 0
+
+    projected_spending = avg_daily * 14
+    remaining = checking_balance - total_bills - projected_spending
+
+    lines = [
+        f"Cash Flow Forecast (14 days)",
+        f"",
+        f"Checking balance: ${checking_balance:,.2f}",
+        f"Upcoming bills: ${total_bills:,.2f} ({len(upcoming_bills)} bills)",
+    ]
+    if upcoming_bills:
+        for b in upcoming_bills:
+            lines.append(f"  - {b['name']}: ${b['amount'] or 0:,.2f} (due {b['due_date']})")
+    lines.append(f"Avg daily spending: ${avg_daily:,.2f}/day (~${projected_spending:,.2f} over 14 days)")
+    lines.append(f"")
+    lines.append(f"Projected balance in 14 days: ${remaining:,.2f}")
+
+    if remaining < 0:
+        # Estimate when you'll run short
+        daily_drain = avg_daily + (total_bills / 14 if total_bills else 0)
+        if daily_drain > 0:
+            days_until_zero = int(checking_balance / daily_drain)
+            run_short_date = today + datetime.timedelta(days=days_until_zero)
+            lines.append(f"")
+            lines.append(f"Warning: You may run short around {run_short_date.isoformat()}.")
+        else:
+            lines.append(f"")
+            lines.append(f"Warning: You may run short before the 14 days are up.")
+
+    return "\n".join(lines)
+
+
 async def handle_schedule(ctx: AppContext, update: Any, context: Any) -> str:
     schedule = ctx.config.get("schedule", {})
     lines = ["**Current Schedule**\n"]
@@ -273,3 +335,52 @@ async def handle_backup(ctx: AppContext, update: Any, context: Any) -> str:
     if not backup_path:
         return "Backup path not configured. Set backup_path in config."
     return f"Backup saved to {backup_path}"
+
+
+async def handle_bills(ctx: AppContext, update: Any, context: Any) -> str:
+    rows = await ctx.store.fetchall(
+        "SELECT * FROM finance_bills ORDER BY paid_this_cycle ASC, due_date ASC"
+    )
+    return format_bills_summary(rows)
+
+
+async def handle_bill_add(ctx: AppContext, update: Any, context: Any) -> str:
+    args = context.args or []
+    if len(args) < 2:
+        return "Usage: /bill_add <name> <amount> [due_date] [frequency]\nExample: /bill_add Electric 150 2026-04-05 monthly"
+    name = args[0]
+    try:
+        amount = float(args[1])
+    except ValueError:
+        return "Amount must be a number. Example: /bill_add Electric 150"
+    due_date = args[2] if len(args) > 2 else None
+    frequency = args[3] if len(args) > 3 else "monthly"
+    valid_frequencies = {"weekly", "biweekly", "monthly", "quarterly", "annual"}
+    if frequency not in valid_frequencies:
+        return f"Invalid frequency. Choose from: {', '.join(sorted(valid_frequencies))}"
+    await ctx.store.execute(
+        "INSERT INTO finance_bills (name, amount, due_date, frequency, source) "
+        "VALUES (?, ?, ?, ?, 'manual') "
+        "ON CONFLICT(name) DO UPDATE SET amount=excluded.amount, due_date=excluded.due_date, "
+        "frequency=excluded.frequency, updated_at=CURRENT_TIMESTAMP",
+        (name, amount, due_date, frequency),
+    )
+    due_str = f" due {due_date}" if due_date else ""
+    return f"Bill added: {name} ${amount:,.2f} {frequency}{due_str}"
+
+
+async def handle_bill_paid(ctx: AppContext, update: Any, context: Any) -> str:
+    args = context.args or []
+    if not args:
+        return "Usage: /bill_paid <name>\nExample: /bill_paid Electric"
+    name = " ".join(args)
+    import datetime
+    today = datetime.date.today().isoformat()
+    rows_changed = await ctx.store.execute_rowcount(
+        "UPDATE finance_bills SET paid_this_cycle = 1, last_paid = ?, updated_at = CURRENT_TIMESTAMP "
+        "WHERE LOWER(name) = LOWER(?)",
+        (today, name),
+    )
+    if rows_changed == 0:
+        return f"No bill found with name '{name}'. Use /bills to see tracked bills."
+    return f"Marked {name} as paid."

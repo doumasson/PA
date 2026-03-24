@@ -6,6 +6,12 @@ from pa.core.tier import Tier
 
 
 async def handle_finance_nl(ctx: AppContext, text: str, update: Update) -> str:
+    # If message starts with "bart", route straight to the full advisor
+    stripped = text.strip()
+    if stripped.lower().startswith("bart"):
+        from pa.plugins.finance.advisor_commands import handle_advisor_nl
+        return await handle_advisor_nl(ctx, text, update)
+
     from pa.plugins.finance.repository import FinanceRepository
     tl = text.lower()
     repo = FinanceRepository(ctx.store)
@@ -109,3 +115,67 @@ If unclear: {"action":"unclear"}. Raw JSON only."""
 
     else:
         return "Try asking about your balances, debt, spending, or upcoming bills. Say 'I paid X on Y' to record a payment. Or use /advisor for a full analysis."
+
+
+async def handle_affordability_nl(ctx: AppContext, text: str, update: Update) -> str:
+    """Check if the user can afford a purchase based on checking balance minus upcoming bills."""
+    import json, re
+    from pa.plugins.finance.repository import FinanceRepository
+
+    repo = FinanceRepository(ctx.store)
+
+    # Use Haiku to extract the dollar amount from the message
+    PARSE = """Extract the dollar amount from this message. Return ONLY JSON:
+{"amount": 0.00, "item": "description of item"}
+If no clear amount, estimate a reasonable price for the item mentioned.
+If you truly cannot determine any amount: {"amount": null, "item": "unknown"}
+Raw JSON only."""
+    result = await ctx.brain.query(text, system_prompt=PARSE, tier=Tier.FAST, use_conversation=False)
+    try:
+        result = re.sub(r',\s*([}\]])', r'\1', result.strip())
+        start = result.find('{')
+        end = result.rfind('}')
+        if start == -1:
+            return "I couldn't figure out the amount. Try: 'Can I afford $200 shoes?'"
+        data = json.loads(result[start:end+1])
+        amount = data.get('amount')
+        item = data.get('item', 'that')
+        if amount is None:
+            return "I couldn't figure out the amount. Try: 'Can I afford $200 shoes?'"
+        amount = float(amount)
+    except Exception:
+        return "I couldn't parse the amount. Try: 'Can I afford $200 shoes?'"
+
+    # Get checking balance
+    balances = await repo.get_latest_balances()
+    checking = [b for b in balances if b['type'] in ('checking', 'depository')]
+    if not checking:
+        return "No checking account data. Use /sync first."
+    checking_balance = sum(b['balance'] for b in checking)
+
+    # Get upcoming unpaid bills
+    upcoming_bills = await ctx.store.fetchall(
+        "SELECT name, amount FROM finance_bills WHERE paid_this_cycle = 0 AND amount IS NOT NULL"
+    )
+    total_bills = sum(b['amount'] for b in upcoming_bills)
+
+    available = checking_balance - total_bills
+
+    if amount < available * 0.8:
+        remaining = available - amount
+        return (
+            f"Yes, you can afford ${amount:,.2f} for {item}. "
+            f"You'd have ${remaining:,.2f} left after bills (${total_bills:,.2f} upcoming)."
+        )
+    elif amount < available:
+        remaining = available - amount
+        return (
+            f"Technically yes (${remaining:,.2f} left after bills), but it'll be tight. "
+            f"Checking: ${checking_balance:,.2f}, upcoming bills: ${total_bills:,.2f}."
+        )
+    else:
+        return (
+            f"Not right now. After upcoming bills (${total_bills:,.2f}), "
+            f"you'd only have ${available:,.2f} available. "
+            f"That {item} at ${amount:,.2f} would put you in the red."
+        )

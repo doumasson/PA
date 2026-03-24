@@ -9,7 +9,7 @@ async def handle_advisor(ctx: AppContext, update: Update, context: ContextTypes.
     if not ctx.vault.is_unlocked:
         return "Vault is locked."
     question = " ".join(context.args) if context.args else None
-    await update.message.reply_text("Consulting the ledgers...")
+    await update.message.reply_text("Bart's crunching the numbers...")
     from pa.plugins.finance.advisor import run_advisor
     return await run_advisor(ctx, user_question=question)
 
@@ -32,6 +32,6 @@ async def handle_debt_update(ctx: AppContext, update: Update, context: ContextTy
 async def handle_advisor_nl(ctx: AppContext, text: str, update: Update) -> str:
     if not ctx.vault.is_unlocked:
         return "Vault is locked."
-    await update.message.reply_text("Consulting the ledgers...")
+    await update.message.reply_text("Bart's crunching the numbers...")
     from pa.plugins.finance.advisor import run_advisor
     return await run_advisor(ctx, user_question=text)

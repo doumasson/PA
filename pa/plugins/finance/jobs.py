@@ -97,6 +97,16 @@ Return ONLY JSON:
         await save_profile(ctx, 'spending_concerns', concerns)
         await save_profile(ctx, 'recurring_updated', datetime.date.today().isoformat())
 
+        # Calculate and save total monthly subscription cost
+        sub_total = sum(s.get('amount', 0) for s in subscriptions)
+        # Also include recurring payments categorized as subscriptions
+        sub_total += sum(
+            p.get('amount', 0) for p in recurring
+            if p.get('category') == 'subscription'
+        )
+        if sub_total > 0:
+            await save_profile(ctx, 'subscription_total', round(sub_total, 2))
+
     except Exception as e:
         await ctx.brain.log_error("detect_recurring", e)
 
@@ -198,6 +208,13 @@ async def job_morning_sync(ctx) -> None:
         if alerts:
             parts.append("\u26a0\ufe0f " + " | ".join(alerts))
 
+        # 6. Subscription total if significant
+        from pa.plugins.finance.advisor import load_profile
+        profile = await load_profile(ctx)
+        sub_total = profile.get('subscription_total', 0)
+        if sub_total and sub_total > 50:
+            parts.append(f"\U0001f4e6 You're paying ${sub_total:,.2f}/month in subscriptions.")
+
         if not parts:
             return  # Nothing to report
 
@@ -278,6 +295,190 @@ async def job_due_date_check(ctx) -> None:
     await _retry(_do_due, ctx, source="due_date_check")
 
 
+async def job_bill_reminders(ctx) -> None:
+    """Daily at 8:30am — remind about upcoming bills, reset paid_this_cycle on 1st of month."""
+    async def _do_bill_reminders():
+        import datetime
+
+        today = datetime.date.today()
+
+        # Reset paid_this_cycle on the 1st of each month
+        if today.day == 1:
+            await ctx.store.execute(
+                "UPDATE finance_bills SET paid_this_cycle = 0, updated_at = CURRENT_TIMESTAMP"
+            )
+
+        # Check for unpaid bills due in next 3 days
+        cutoff = (today + datetime.timedelta(days=3)).isoformat()
+        today_str = today.isoformat()
+        bills = await ctx.store.fetchall(
+            "SELECT name, amount, due_date FROM finance_bills "
+            "WHERE paid_this_cycle = 0 AND due_date IS NOT NULL "
+            "AND due_date >= ? AND due_date <= ? "
+            "ORDER BY due_date",
+            (today_str, cutoff),
+        )
+        if bills:
+            lines = []
+            for b in bills:
+                amt_str = f"${b['amount']:,.2f}" if b.get('amount') else "amount TBD"
+                lines.append(f"  {b['name']}: {amt_str} due {b['due_date']}")
+            await ctx.bot.send_message(
+                "Bills due soon:\n" + "\n".join(lines)
+            )
+
+    await _retry(_do_bill_reminders, ctx, source="bill_reminders")
+
+
+async def job_spending_pace_check(ctx) -> None:
+    """Daily at noon — alert if spending pace exceeds 120% of average."""
+    if not ctx.vault.is_unlocked:
+        return
+
+    async def _do_pace():
+        import datetime
+        from pa.plugins.finance.repository import FinanceRepository
+
+        repo = FinanceRepository(ctx.store)
+        today = datetime.date.today()
+        first_of_month = today.replace(day=1)
+        days_elapsed = (today - first_of_month).days or 1
+        days_in_month = (
+            (first_of_month.replace(month=first_of_month.month % 12 + 1, day=1)
+             if first_of_month.month < 12
+             else first_of_month.replace(year=first_of_month.year + 1, month=1, day=1))
+            - first_of_month
+        ).days
+
+        # Spending so far this month
+        txns = await repo.get_transactions(since_date=first_of_month.isoformat(), limit=1000)
+        debits = [t for t in txns if t['amount'] > 0]
+        spending_so_far = sum(t['amount'] for t in debits)
+
+        # Average monthly spending from last 3 months
+        monthly = await repo.get_monthly_spending(months=3)
+        if not monthly:
+            return
+        avg_monthly = sum(m['spending'] for m in monthly) / len(monthly)
+
+        # Calculate pace
+        projected = (spending_so_far / days_elapsed) * days_in_month
+
+        if projected > avg_monthly * 1.2:
+            await ctx.bot.send_message(
+                f"Spending pace alert: You've spent ${spending_so_far:,.2f} in {days_elapsed} days. "
+                f"At this rate you'll hit ${projected:,.2f} this month (avg is ${avg_monthly:,.2f})."
+            )
+
+    await _retry(_do_pace, ctx, source="spending_pace_check")
+
+
+async def job_weekly_digest(ctx) -> None:
+    """Saturday at 9am — weekly spending digest."""
+    if not ctx.vault.is_unlocked:
+        return
+
+    async def _do_digest():
+        import datetime
+        from collections import defaultdict
+        from pa.plugins.finance.repository import FinanceRepository
+        from pa.plugins.finance.advisor import load_profile
+
+        repo = FinanceRepository(ctx.store)
+        today = datetime.date.today()
+
+        # This week (Mon–today) and last week
+        days_since_monday = today.weekday()
+        this_monday = today - datetime.timedelta(days=days_since_monday)
+        last_monday = this_monday - datetime.timedelta(days=7)
+
+        # This week's transactions
+        this_week_txns = await repo.get_transactions(
+            since_date=this_monday.isoformat(), limit=500
+        )
+        this_week_debits = [
+            t for t in this_week_txns
+            if t['amount'] > 0 and t['date'] >= this_monday.isoformat()
+        ]
+        this_week_total = sum(t['amount'] for t in this_week_debits)
+
+        # Last week's transactions
+        last_week_txns = await repo.get_transactions(
+            since_date=last_monday.isoformat(), limit=500
+        )
+        last_week_debits = [
+            t for t in last_week_txns
+            if t['amount'] > 0
+            and last_monday.isoformat() <= t['date'] < this_monday.isoformat()
+        ]
+        last_week_total = sum(t['amount'] for t in last_week_debits)
+
+        # Top 3 categories this week
+        by_cat = defaultdict(float)
+        for t in this_week_debits:
+            cat = t.get('category') or 'Uncategorized'
+            by_cat[cat.split('/')[0]] += t['amount']
+        top_cats = sorted(by_cat.items(), key=lambda x: -x[1])[:3]
+
+        parts = [
+            f"Weekly Digest ({this_monday.isoformat()} to {today.isoformat()})",
+            "",
+            f"Total spending: ${this_week_total:,.2f}",
+        ]
+
+        if last_week_total > 0:
+            diff = this_week_total - last_week_total
+            direction = "up" if diff > 0 else "down"
+            parts.append(
+                f"vs last week: ${last_week_total:,.2f} ({direction} ${abs(diff):,.2f})"
+            )
+
+        if top_cats:
+            parts.append("")
+            parts.append("Top categories:")
+            for cat, amt in top_cats:
+                parts.append(f"  - {cat}: ${amt:,.2f}")
+
+        # Bills paid this week
+        bills_paid = await ctx.store.fetchall(
+            "SELECT name, amount FROM finance_bills WHERE last_paid >= ?",
+            (this_monday.isoformat(),),
+        )
+        if bills_paid:
+            parts.append("")
+            parts.append("Bills paid:")
+            for b in bills_paid:
+                parts.append(f"  - {b['name']}: ${b['amount'] or 0:,.2f}")
+
+        # Bills due next week
+        next_monday = this_monday + datetime.timedelta(days=7)
+        next_sunday = this_monday + datetime.timedelta(days=13)
+        bills_due = await ctx.store.fetchall(
+            "SELECT name, amount, due_date FROM finance_bills "
+            "WHERE paid_this_cycle = 0 AND due_date >= ? AND due_date <= ? "
+            "ORDER BY due_date",
+            (next_monday.isoformat(), next_sunday.isoformat()),
+        )
+        if bills_due:
+            parts.append("")
+            parts.append("Bills due next week:")
+            for b in bills_due:
+                parts.append(
+                    f"  - {b['name']}: ${b['amount'] or 0:,.2f} (due {b['due_date']})"
+                )
+
+        # Subscription total
+        profile = await load_profile(ctx)
+        sub_total = profile.get('subscription_total', 0)
+        if sub_total and sub_total > 50:
+            parts.append("")
+            parts.append(f"Monthly subscriptions: ${sub_total:,.2f}")
+
+        await ctx.bot.send_message("\n".join(parts))
+
+    await _retry(_do_digest, ctx, source="weekly_digest")
+
+
 def get_finance_jobs() -> list[Job]:
     return [
         Job(name="morning_sync", handler=job_morning_sync,
@@ -286,6 +487,12 @@ def get_finance_jobs() -> list[Job]:
             trigger="interval", kwargs={"hours": 4}),
         Job(name="due_date_check", handler=job_due_date_check,
             trigger="cron", kwargs={"hour": 8, "minute": 0}),
+        Job(name="bill_reminders", handler=job_bill_reminders,
+            trigger="cron", kwargs={"hour": 8, "minute": 30}),
         Job(name="weekly_advisor", handler=job_weekly_advisor,
             trigger="cron", kwargs={"day_of_week": "sun", "hour": 8, "minute": 0}),
+        Job(name="spending_pace_check", handler=job_spending_pace_check,
+            trigger="cron", kwargs={"hour": 12, "minute": 0}),
+        Job(name="weekly_digest", handler=job_weekly_digest,
+            trigger="cron", kwargs={"day_of_week": "sat", "hour": 9, "minute": 0}),
     ]

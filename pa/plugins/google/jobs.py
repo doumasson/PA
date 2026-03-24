@@ -111,6 +111,27 @@ Speak results only as JSON array, no markdown."""
         except Exception as e:
             log.error("Bill save failed (non-fatal): %s", e, exc_info=True)
 
+    # Also save utility/insurance/subscription bills to the finance_bills table
+    # (credit_card/loan/mortgage stay as debts only)
+    _BILL_ACCOUNT_TYPES = {'utility', 'insurance', 'subscription'}
+    if pending_bills:
+        for bill in pending_bills:
+            if bill.get('account_type') in _BILL_ACCOUNT_TYPES:
+                try:
+                    bill_name = bill.get('account_name') or bill.get('institution', 'Unknown')
+                    category = bill.get('account_type', 'utility')
+                    amount = float(bill.get('balance') or bill.get('minimum_payment') or 0)
+                    due_date = bill.get('due_date')
+                    await ctx.store.execute(
+                        "INSERT INTO finance_bills (name, category, amount, due_date, source) "
+                        "VALUES (?, ?, ?, ?, 'email') "
+                        "ON CONFLICT(name) DO UPDATE SET amount=excluded.amount, "
+                        "due_date=excluded.due_date, updated_at=CURRENT_TIMESTAMP",
+                        (bill_name, category, amount if amount > 0 else None, due_date),
+                    )
+                except Exception as e:
+                    log.error("finance_bills save failed for %s: %s", bill.get('institution'), e)
+
     # Create calendar events for bill due dates (separate from DB save so
     # a calendar failure doesn't block persistence)
     for bill in pending_bills:

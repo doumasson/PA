@@ -68,6 +68,31 @@ def format_trend_summary(monthly: list[dict[str, Any]], detail_month: str | None
     return "\n".join(lines)
 
 
+def format_bills_summary(bills: list[dict[str, Any]]) -> str:
+    if not bills:
+        return "No bills tracked yet. Use /bill_add to add one."
+    unpaid = [b for b in bills if not b.get("paid_this_cycle")]
+    paid = [b for b in bills if b.get("paid_this_cycle")]
+    unpaid.sort(key=lambda b: b.get("due_date") or "9999-99-99")
+    lines = ["**Upcoming Bills**\n"]
+    total_upcoming = 0.0
+    for b in unpaid:
+        amt_str = f"${b['amount']:,.2f}" if b.get("amount") else "amount TBD"
+        due_str = f"due {b['due_date']}" if b.get("due_date") else "no due date"
+        auto = " (auto-pay)" if b.get("auto_pay") else ""
+        lines.append(f"  {b['name']}: {amt_str} — {due_str}{auto}")
+        if b.get("amount"):
+            total_upcoming += b["amount"]
+    if total_upcoming > 0:
+        lines.append(f"\n  **Total upcoming: ${total_upcoming:,.2f}**")
+    if paid:
+        lines.append("\n**Paid This Cycle**\n")
+        for b in paid:
+            amt_str = f"${b['amount']:,.2f}" if b.get("amount") else ""
+            lines.append(f"  ~{b['name']}~ {amt_str}")
+    return "\n".join(lines)
+
+
 def format_spending_summary(transactions: list[dict[str, Any]], period: str) -> str:
     if not transactions:
         return f"No transactions found for {period}."

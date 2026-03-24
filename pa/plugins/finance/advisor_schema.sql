@@ -29,3 +29,20 @@ CREATE TABLE IF NOT EXISTS finance_advisor_log (
     questions_asked TEXT,
     data_sources TEXT
 );
+
+CREATE TABLE IF NOT EXISTS finance_bills (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    category TEXT NOT NULL DEFAULT 'utility',
+    amount REAL,
+    due_date TEXT,
+    frequency TEXT DEFAULT 'monthly',
+    auto_pay BOOLEAN DEFAULT 0,
+    paid_this_cycle BOOLEAN DEFAULT 0,
+    last_paid TEXT,
+    source TEXT DEFAULT 'manual',
+    notes TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(name)
+);
