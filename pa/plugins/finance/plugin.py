@@ -51,19 +51,22 @@ class FinancePlugin(PluginBase):
             "plan", "strategy", "priority", "mortgage", "student loan",
             "collections", "charged off", "settlement", "negotiate", "pay off",
             "where do i stand", "how much do i owe", "what should i pay",
+            "analyze my", "where can i save", "subscription",
         ]
         return [
             NLHandler(keywords=advisor_keywords, handler=handle_advisor_nl, priority=20),
+            NLHandler(keywords=["i paid", "i just paid", "paid off", "made a payment", "balance is now", "new balance"], handler=handle_finance_nl, priority=15),
             NLHandler(keywords=["balance", "how much", "account", "checking", "savings", "credit card"], handler=handle_finance_nl, priority=10),
             NLHandler(keywords=["debt", "owe", "loan", "payoff"], handler=handle_finance_nl, priority=10),
-            NLHandler(keywords=["spending", "spent", "expenses", "transactions", "charges"], handler=handle_finance_nl, priority=10),
+            NLHandler(keywords=["spending", "spent", "expenses", "transactions", "charges", "subscription"], handler=handle_finance_nl, priority=10),
             NLHandler(keywords=["due", "payment", "bill", "upcoming"], handler=handle_finance_nl, priority=10),
         ]
 
     def system_prompt_fragment(self) -> str:
         return (
-            "Financial advisor active. You have access to Steve's real bank accounts, "
+            "Financial advisor active. You have access to Steven's real bank accounts, "
             "credit cards, and transaction data via Teller API. "
-            "Steve is in financial difficulty — be honest, specific, and actionable. "
-            "Never give generic advice. Use /advisor for full financial analysis."
+            "Steven is in financial difficulty — be honest, specific, and actionable. "
+            "Never give generic advice. Use /advisor for full financial analysis. "
+            "Steven can say 'I paid X on Y' to record payments."
         )
