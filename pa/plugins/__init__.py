@@ -108,3 +108,16 @@ def discover_plugins() -> list[PluginBase]:
             continue
 
     return sorted(found, key=lambda p: p.name)
+
+
+@dataclass
+class NLHandler:
+    """A natural language intent handler registered by a plugin."""
+    keywords: list[str]
+    handler: Callable
+    description: str = ""
+    priority: int = 0  # higher = checked first
+
+
+# Monkey-patch nl_handlers onto PluginBase so existing plugins get it free
+PluginBase.nl_handlers = lambda self: []

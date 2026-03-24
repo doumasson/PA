@@ -1,0 +1,18 @@
+{
+  "telegram_user_id": 5678604724,
+  "telegram_bot_token_env": "PA_TELEGRAM_TOKEN",
+  "claude_api_key_env": "PA_CLAUDE_API_KEY",
+  "monthly_income": 7640,
+  "financial_goals": ["pay off all debt", "fix credit score", "build emergency fund"],
+  "preferences": [],
+  "schedule": {
+    "bank_balance_hours": 4,
+    "cc_balance_daily_time": "06:00",
+    "transaction_pull_daily_time": "07:00",
+    "due_date_check_time": "08:00",
+    "weekly_summary_day": "sunday",
+    "weekly_summary_time": "19:00"
+  },
+  "cost_cap_monthly_usd": 5,
+  "backup_path": ""
+}

@@ -51,3 +51,14 @@ CREATE TABLE IF NOT EXISTS finance_merchant_categories (
     hit_count INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS finance_scraper_knowledge (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    institution TEXT UNIQUE NOT NULL,
+    knowledge TEXT NOT NULL DEFAULT '{}',
+    success_count INTEGER DEFAULT 0,
+    failure_count INTEGER DEFAULT 0,
+    last_success TEXT,
+    last_error TEXT,
+    updated_at TEXT
+);

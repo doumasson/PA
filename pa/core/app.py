@@ -49,6 +49,8 @@ async def main() -> None:
             await store.init_plugin_schema(plugin.name, ddl)
         for cmd in plugin.commands():
             bot.register_command(cmd)
+        for nl in plugin.nl_handlers():
+            bot.register_nl_handler(nl)
         for job in plugin.jobs():
             scheduler.register_job(job)
         patterns = plugin.tier_patterns()
@@ -65,23 +67,30 @@ async def main() -> None:
     for plugin in plugins:
         await plugin.on_startup(ctx)
 
+
+    # Auto-unlock vault if password provided via environment
+    import os
+    vault_password = os.environ.get("PA_VAULT_PASSWORD", "")
+    if vault_password:
+        try:
+            await vault.unlock(vault_password)
+            if vault.derived_key and hasattr(store, 'reconnect_encrypted'):
+                await store.reconnect_encrypted(vault.derived_key)
+        except Exception as e:
+            pass  # Will prompt via Telegram if auto-unlock fails
+
     await bot.start()
 
-    vault_exists = (data_dir / "vault.enc").exists()
-    if vault_exists:
-        await bot.send_message(f"{GREETING} Send /unlock to enter master password.")
+    if vault.is_unlocked:
+        await bot.send_message(f"{GREETING} All systems up.")
     else:
-        await bot.send_message(
-            f"{GREETING} First-time setup:\n"
-            "1. Send /unlock to create your encrypted vault\n"
-            "2. You'll set a master password\n"
-            "3. Then add your financial institution credentials"
-        )
+        await bot.send_message(f"{GREETING} Vault locked — send /unlock to continue.")
 
     async def alert_handler(job_name: str) -> None:
         if job_name == "heartbeat":
             await bot.send_message(f"{NAME} running. All systems OK.")
 
+    scheduler.set_ctx(ctx)
     scheduler.register_alert_handler(alert_handler)
     await scheduler.start()
 

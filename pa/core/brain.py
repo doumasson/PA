@@ -161,15 +161,43 @@ class Brain:
         """Extract JSON from response text, handling markdown code blocks."""
         import json as json_mod
         import re
-        match = re.search(r"```(?:json)?\s*\n?(.*?)\n?```", text, re.DOTALL)
-        if match:
-            return json_mod.loads(match.group(1).strip())
-        stripped = text.strip()
-        start = stripped.find("{")
-        end = stripped.rfind("}")
-        if start != -1 and end != -1:
-            return json_mod.loads(stripped[start : end + 1])
-        raise ValueError(f"No valid JSON found in response: {text[:200]}")
+        # Strip markdown fences first
+        fence = re.search(r"```(?:json)?\s*\n?(.*?)\n?```", text, re.DOTALL)
+        if fence:
+            text = fence.group(1).strip()
+        else:
+            text = text.strip()
+        # Find outermost JSON object
+        start = text.find("{")
+        if start == -1:
+            raise ValueError(f"No JSON object found in response: {text[:200]}")
+        # Walk to find matching closing brace
+        depth = 0
+        end = -1
+        in_string = False
+        escape = False
+        for i, ch in enumerate(text[start:], start):
+            if escape:
+                escape = False
+                continue
+            if ch == "\\" and in_string:
+                escape = True
+                continue
+            if ch == "\"" and not escape:
+                in_string = not in_string
+                continue
+            if in_string:
+                continue
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    end = i
+                    break
+        if end == -1:
+            raise ValueError(f"Unmatched braces in JSON: {text[:200]}")
+        return json_mod.loads(text[start:end + 1])
 
     @property
     def cost_tracker(self) -> CostTracker:

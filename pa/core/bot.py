@@ -26,12 +26,16 @@ class PABot:
         self._mfa_bridge = mfa_bridge
         self._app: Application | None = None
         self._command_registry: dict[str, Command] = {}
+        self._nl_handlers: list = []
         self._plugin_names: list[str] = []
 
     def register_command(self, cmd: Command) -> None:
         if cmd.name in self._builtin_commands:
             raise ValueError(f"Cannot override builtin command: /{cmd.name}")
         self._command_registry[cmd.name] = cmd
+
+    def register_nl_handler(self, handler) -> None:
+        self._nl_handlers.append(handler)
 
     def set_plugin_names(self, names: list[str]) -> None:
         self._plugin_names = names
@@ -89,6 +93,14 @@ class PABot:
             MessageHandler(filters.TEXT & ~filters.COMMAND, self._handle_message)
         )
 
+        from pa.plugins.agent.voice import handle_voice
+        self._app.add_handler(
+            MessageHandler(
+                filters.VOICE,
+                lambda u, c: handle_voice(u, c, self._brain, self)
+            )
+        )
+
         await self._app.initialize()
         await self._app.start()
         await self._app.updater.start_polling()
@@ -111,7 +123,6 @@ class PABot:
     async def _handle_unlock(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not self._check_auth(update):
             return
-        # Clean up any prior stacked prompt
         old_prompt = context.user_data.pop("_prompt_message", None)
         if old_prompt:
             try:
@@ -156,9 +167,7 @@ class PABot:
     async def _handle_addcred(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not self._check_auth(update):
             return
-        if not self._vault.is_unlocked:
-            await update.message.reply_text("Vault is locked. Send /unlock first.")
-            return
+
         institution = " ".join(context.args) if context.args else None
         if institution:
             context.user_data["addcred"] = {"institution": institution, "step": "url"}
@@ -183,7 +192,6 @@ class PABot:
         for inst, data in sorted(creds.items()):
             username = data.get("username", "?")
             url = data.get("url", "")
-            # Mask username: show first 2 and last 2 chars
             if len(username) > 4:
                 masked = username[:2] + "*" * (len(username) - 4) + username[-2:]
             else:
@@ -220,7 +228,6 @@ class PABot:
         if not self._check_auth(update):
             return
 
-        # Vault unlock flow
         if context.user_data.get("awaiting_password"):
             context.user_data["awaiting_password"] = False
             password = update.message.text
@@ -241,7 +248,6 @@ class PABot:
                 await update.effective_chat.send_message("Wrong password. Try /unlock again.")
             return
 
-        # Add credential flow
         addcred = context.user_data.get("addcred")
         if addcred:
             step = addcred["step"]
@@ -287,7 +293,6 @@ class PABot:
                     await update.effective_chat.send_message(f"Error saving: {e}")
             return
 
-        # MFA relay to scraper subprocess
         if hasattr(self, '_mfa_subprocess') and self._mfa_subprocess:
             proc = self._mfa_subprocess
             code = update.message.text.strip()
@@ -304,19 +309,34 @@ class PABot:
                     self._mfa_institution = None
             return
 
-        # MFA relay
         for inst in list(self._mfa_bridge._pending.keys()):
             if self._mfa_bridge.has_pending(inst):
                 await self._mfa_bridge.provide_mfa(inst, update.message.text)
                 await update.message.reply_text(f"MFA code sent to {inst}.")
                 return
-
-        if not self._vault.is_unlocked:
-            await update.message.reply_text("Vault is locked. Send /unlock first.")
             return
 
-        try:
-            response = await self._brain.query(update.message.text)
-            await update.message.reply_text(response)
-        except Exception as e:
-            await update.message.reply_text(f"Error: {e}")
+        text = update.message.text
+        ctx = AppContext(
+            store=self._store, vault=self._vault, brain=self._brain,
+            bot=self, scheduler=None, config=self._config,
+        )
+        tl = text.lower()
+        matched = None
+        for h in sorted(self._nl_handlers, key=lambda x: -getattr(x, 'priority', 0)):
+            if any(kw in tl for kw in h.keywords):
+                matched = h
+                break
+        if matched:
+            try:
+                result = await matched.handler(ctx, text, update)
+                if result:
+                    await update.message.reply_text(result)
+            except Exception as e:
+                await update.message.reply_text(f"Error: {e}")
+        else:
+            try:
+                response = await self._brain.query(text)
+                await update.message.reply_text(response)
+            except Exception as e:
+                await update.message.reply_text(f"Error: {e}")

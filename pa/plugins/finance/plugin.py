@@ -1,5 +1,7 @@
 from pathlib import Path
-from pa.plugins import PluginBase, Command
+from pa.plugins import PluginBase, Command, NLHandler
+from pa.plugins.finance.nl import handle_finance_nl
+from pa.plugins.finance.advisor_commands import handle_advisor, handle_debt_update, handle_advisor_nl
 from pa.plugins.finance.commands import (
     handle_balance, handle_debt, handle_due, handle_spending,
     handle_plan, handle_scrape, handle_schedule, handle_backup,
@@ -8,15 +10,18 @@ from pa.plugins.finance.jobs import get_finance_jobs
 from pa.plugins.finance.tier_patterns import FINANCE_TIER_PATTERNS
 
 _SCHEMA_PATH = Path(__file__).parent / "schema.sql"
+_ADVISOR_SCHEMA_PATH = Path(__file__).parent / "advisor_schema.sql"
 
 
 class FinancePlugin(PluginBase):
     name = "finance"
-    description = "Financial tracking, analysis, and debt management"
-    version = "0.1.0"
+    description = "Financial tracking, analysis, debt management and advisor"
+    version = "0.2.0"
 
     def schema_sql(self) -> str:
-        return _SCHEMA_PATH.read_text(encoding="utf-8")
+        base = _SCHEMA_PATH.read_text(encoding="utf-8")
+        advisor = _ADVISOR_SCHEMA_PATH.read_text(encoding="utf-8") if _ADVISOR_SCHEMA_PATH.exists() else ""
+        return base + advisor
 
     def commands(self) -> list[Command]:
         return [
@@ -28,6 +33,8 @@ class FinancePlugin(PluginBase):
             Command(name="scrape", description="Force a scrape", handler=handle_scrape),
             Command(name="schedule", description="View schedule", handler=handle_schedule),
             Command(name="backup", description="Backup database", handler=handle_backup),
+            Command(name="advisor", description="Financial advisor", handler=handle_advisor),
+            Command(name="debt_add", description="Add/update a debt manually", handler=handle_debt_update),
         ]
 
     def jobs(self) -> list:
@@ -36,10 +43,27 @@ class FinancePlugin(PluginBase):
     def tier_patterns(self) -> dict[str, list[str]]:
         return FINANCE_TIER_PATTERNS
 
+    def nl_handlers(self) -> list:
+        advisor_keywords = [
+            "financial situation", "debt plan", "get out of debt", "what should i do",
+            "financial advice", "advise me", "help me", "my finances", "overall",
+            "complete picture", "everything", "total debt", "how bad", "what do i owe",
+            "plan", "strategy", "priority", "mortgage", "student loan",
+            "collections", "charged off", "settlement", "negotiate", "pay off",
+            "where do i stand", "how much do i owe", "what should i pay",
+        ]
+        return [
+            NLHandler(keywords=advisor_keywords, handler=handle_advisor_nl, priority=20),
+            NLHandler(keywords=["balance", "how much", "account", "checking", "savings", "credit card"], handler=handle_finance_nl, priority=10),
+            NLHandler(keywords=["debt", "owe", "loan", "payoff"], handler=handle_finance_nl, priority=10),
+            NLHandler(keywords=["spending", "spent", "expenses", "transactions", "charges"], handler=handle_finance_nl, priority=10),
+            NLHandler(keywords=["due", "payment", "bill", "upcoming"], handler=handle_finance_nl, priority=10),
+        ]
+
     def system_prompt_fragment(self) -> str:
         return (
-            "Financial analysis module active. You have access to bank accounts, "
-            "credit cards, and transaction data. Help the user understand their spending, "
-            "track debt payoff progress, and make smart financial decisions. Be specific "
-            "with numbers. Flag concerning patterns proactively."
+            "Financial advisor active. You have access to Steve's real bank accounts, "
+            "credit cards, and transaction data via Teller API. "
+            "Steve is in financial difficulty — be honest, specific, and actionable. "
+            "Never give generic advice. Use /advisor for full financial analysis."
         )
