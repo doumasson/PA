@@ -1,7 +1,10 @@
 """Email triage using Claude - classifies emails in batches."""
 from __future__ import annotations
 import json
+import logging
 from pa.core.tier import Tier
+
+log = logging.getLogger(__name__)
 
 SYSTEM = """You are an email triage assistant for a busy dad named Steven.
 He has two sons: Maddox (12) and Asher (10) who play soccer and basketball.
@@ -31,7 +34,9 @@ async def classify_emails_batch(emails: list[dict], brain, system_override: str 
         return []
 
     all_results = []
-    batch_size = 10
+    # Smaller batches when emails have full bodies (bill emails) to keep Haiku output clean
+    has_bodies = any(e.get('body') for e in emails)
+    batch_size = 5 if has_bodies else 10
 
     for i in range(0, len(emails), batch_size):
         batch = emails[i:i + batch_size]
@@ -74,20 +79,36 @@ async def classify_emails_batch(emails: list[dict], brain, system_override: str 
             if isinstance(results, list):
                 all_results.extend(results)
         except json.JSONDecodeError as e:
-            print(f"Triage batch {i//batch_size} JSON error: {e}")
-            # Try individual email fallback
+            log.warning("Triage batch %d JSON error: %s", i // batch_size, e)
+            # Fall back to classifying each email individually
             for email in batch:
-                all_results.append({
-                    "id": email["id"],
-                    "category": "noise",
-                    "urgency": "low",
-                    "summary": email.get("subject", "")[:50],
-                    "notify": False,
-                    "calendar_event": None,
-                })
+                try:
+                    single = await brain.query(
+                        f"Classify this email as a JSON array with one element:\n\n{_format_email(email)}",
+                        system_prompt=system_override or SYSTEM,
+                        tier=Tier.FAST, use_conversation=False,
+                    )
+                    single = single.strip()
+                    start = single.find('[')
+                    end = single.rfind(']')
+                    if start != -1 and end != -1:
+                        single = single[start:end+1]
+                    import re
+                    single = re.sub(r',\s*([}\]])', r'\1', single)
+                    parsed = json.loads(single)
+                    if isinstance(parsed, list):
+                        all_results.extend(parsed)
+                except Exception:
+                    all_results.append({
+                        "id": email["id"],
+                        "category": "noise",
+                        "urgency": "low",
+                        "summary": email.get("subject", "")[:50],
+                        "notify": False,
+                    })
             continue
         except Exception as e:
-            print(f"Triage batch {i//batch_size} error: {e}")
+            log.error("Triage batch %d error: %s", i // batch_size, e)
             continue
 
     return all_results
