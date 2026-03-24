@@ -102,19 +102,107 @@ Return ONLY JSON:
 
 
 async def job_morning_sync(ctx) -> None:
-    """Every morning — sync accounts, send summary."""
+    """Every morning — sync accounts, build comprehensive morning briefing."""
     if not ctx.vault.is_unlocked:
         return
 
     async def _do_sync():
-        from pa.plugins.teller.sync import sync_teller_accounts, get_yesterday_summary
-        await sync_teller_accounts(ctx)
         import datetime
+        from collections import defaultdict
+        from pa.plugins.teller.sync import sync_teller_accounts
+        from pa.plugins.finance.repository import FinanceRepository
+        from pa.plugins.finance.merchants import categorize_transactions
+        from pa.core.tier import Tier
+
+        # 1. Sync latest data from Teller
+        await sync_teller_accounts(ctx)
+
+        # On Mondays, also detect recurring payments
         if datetime.date.today().weekday() == 0:
             await detect_recurring_payments(ctx)
-        summary = await get_yesterday_summary(ctx)
-        if summary:
-            await ctx.bot.send_message(summary)
+
+        repo = FinanceRepository(ctx.store)
+        parts = []
+
+        # 2. Balances — checking & savings
+        balances = await repo.get_latest_balances()
+        checking = [b for b in balances if b['type'] in ('checking', 'depository')]
+        savings = [b for b in balances if b['type'] == 'savings']
+        credit = [b for b in balances if b['type'] in ('credit', 'credit_card')]
+
+        bal_bits = []
+        for b in checking:
+            bal_bits.append(f"Checking ${b['balance']:,.2f}")
+        for b in savings:
+            bal_bits.append(f"Savings ${b['balance']:,.2f}")
+        if bal_bits:
+            parts.append("\U0001f4b0 " + ", ".join(bal_bits))
+
+        # 3. Yesterday's spending with merchant categories
+        yesterday = (datetime.date.today() - datetime.timedelta(days=1)).isoformat()
+        txns = await repo.get_transactions(since_date=yesterday, limit=200)
+        yesterday_debits = [t for t in txns if t['date'] == yesterday and t['amount'] > 0]
+
+        if yesterday_debits:
+            await categorize_transactions(ctx.store, yesterday_debits)
+            total_spent = sum(t['amount'] for t in yesterday_debits)
+            # Group by category
+            by_cat = defaultdict(float)
+            for t in yesterday_debits:
+                cat = t.get('learned_category') or 'Other'
+                # Use top-level category only (e.g. "Food" from "Food/Dining")
+                cat_short = cat.split('/')[0]
+                by_cat[cat_short] += t['amount']
+            # Sort by amount descending
+            cat_parts = [f"{cat} ${amt:,.0f}" for cat, amt in sorted(by_cat.items(), key=lambda x: -x[1])]
+            parts.append(f"\U0001f4ca Yesterday: ${total_spent:,.2f} spent ({', '.join(cat_parts)})")
+        else:
+            parts.append("\U0001f4ca Yesterday: No spending recorded.")
+
+        # 4. Bills due in next 7 days
+        today = datetime.date.today()
+        due_soon = []
+        for b in balances:
+            if b.get('due_date'):
+                try:
+                    due = datetime.date.fromisoformat(b['due_date'])
+                    days_until = (due - today).days
+                    if 0 <= days_until <= 7:
+                        amt = b.get('minimum_payment') or b.get('statement_balance') or b['balance']
+                        due_soon.append((days_until, b['institution'], b['name'], amt))
+                except Exception:
+                    pass
+        if due_soon:
+            due_soon.sort()
+            due_lines = []
+            for days_until, inst, name, amt in due_soon:
+                day_str = "today" if days_until == 0 else f"in {days_until}d"
+                due_lines.append(f"{inst} {name} ${amt:,.2f} ({day_str})")
+            parts.append("\U0001f4c5 Due this week: " + " | ".join(due_lines))
+
+        # 5. Alerts — low balance, unusual spending, credit card balances
+        alerts = []
+        for b in checking:
+            if b['balance'] < 500:
+                alerts.append(f"Low checking balance: ${b['balance']:,.2f}")
+        for b in credit:
+            if b['balance'] > 0:
+                limit = b.get('credit_limit')
+                if limit and b['balance'] / limit > 0.5:
+                    alerts.append(f"{b['name']} at {b['balance']/limit:.0%} utilization (${b['balance']:,.2f})")
+        # Flag high spending day
+        if yesterday_debits:
+            total_spent = sum(t['amount'] for t in yesterday_debits)
+            if total_spent > 300:
+                alerts.append(f"Heavy spending day yesterday (${total_spent:,.2f})")
+        if alerts:
+            parts.append("\u26a0\ufe0f " + " | ".join(alerts))
+
+        if not parts:
+            return  # Nothing to report
+
+        message = "Good morning Steven.\n\n" + "\n".join(parts)
+        await ctx.bot.send_message(message)
 
     await _retry(_do_sync, ctx, source="morning_sync")
 

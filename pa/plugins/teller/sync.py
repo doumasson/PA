@@ -69,46 +69,64 @@ async def sync_teller_accounts(ctx, institutions=None):
 
 
 async def get_spending_by_merchant(ctx, merchant, days=30):
+    from pa.core.tier import Tier
+    from pa.plugins.finance.merchants import categorize_transactions
     repo = FinanceRepository(ctx.store)
     since = (datetime.date.today() - datetime.timedelta(days=days)).isoformat()
     txns = await repo.get_transactions(since_date=since, limit=500)
     matches = [t for t in txns if merchant.lower() in t['description'].lower() and t['amount'] > 0]
     if not matches:
         return f"I find no record of spending at {merchant} in the last {days} days."
+    await categorize_transactions(ctx.store, matches)
     total = sum(t['amount'] for t in matches)
-    lines = "\n".join(f"  {t['date']}: ${t['amount']:,.2f}" for t in matches)
-    from pa.core.tier import Tier
+    lines = "\n".join(
+        f"  {t['date']}: ${t['amount']:,.2f} [{t.get('learned_category') or 'Uncategorized'}]"
+        for t in matches
+    )
     prompt = f"Steven asked about spending at '{merchant}' over {days} days.\nFound {len(matches)} transactions totaling ${total:,.2f}:\n{lines}\nGive a brief Dumbledore-style summary. Be honest if the amount is concerning."
-    return await ctx.brain.query(prompt, tier=Tier.FAST)
+    return await ctx.brain.query(prompt, tier=Tier.FAST, use_conversation=False)
 
 
 async def get_weekly_spending_summary(ctx):
+    from pa.core.tier import Tier
+    from pa.plugins.finance.merchants import categorize_transactions
     repo = FinanceRepository(ctx.store)
     since = (datetime.date.today() - datetime.timedelta(days=7)).isoformat()
     txns = await repo.get_transactions(since_date=since, limit=200)
     debits = [t for t in txns if t['amount'] > 0]
     if not debits:
         return "No transactions found for the past week."
+    await categorize_transactions(ctx.store, debits)
     total = sum(t['amount'] for t in debits)
+    # Group by learned category
+    by_cat: dict[str, list] = {}
+    for t in debits:
+        cat = t.get('learned_category') or 'Uncategorized'
+        by_cat.setdefault(cat, []).append(t)
+    cat_summary = "\n".join(
+        f"  {cat}: ${sum(t['amount'] for t in items):,.2f} ({len(items)} txns)"
+        for cat, items in sorted(by_cat.items(), key=lambda x: -sum(t['amount'] for t in x[1]))
+    )
     txn_list = "\n".join(
-        f"{t['date']} | {t['description'][:45]} | ${t['amount']:,.2f}"
+        f"{t['date']} | {t['description'][:45]} | ${t['amount']:,.2f} | {t.get('learned_category') or 'Uncategorized'}"
         for t in debits
     )
-    from pa.core.tier import Tier
     prompt = (
         f"Analyze Steven's spending for the past 7 days. Total: ${total:,.2f}\n\n"
+        f"Spending by category:\n{cat_summary}\n\n"
         f"Transactions:\n{txn_list}\n\n"
-        f"1. Categorize transactions (Food/Dining, Groceries, Subscriptions, Entertainment, Bills/Utilities, Shopping, Transfer/Income, Other)\n"
-        f"2. For obscure merchant names, use your knowledge to identify what they are\n"
-        f"3. Show spending by category with totals\n"
-        f"4. Flag concerning patterns\n"
-        f"5. Give 2-3 actionable insights\n"
+        f"Categories are pre-assigned above — use them as-is.\n"
+        f"1. Show the category breakdown (already provided)\n"
+        f"2. Flag concerning patterns\n"
+        f"3. Give 2-3 actionable insights\n"
         f"Speak as Dumbledore. Keep it readable."
     )
-    return await ctx.brain.query(prompt, tier=Tier.STANDARD)
+    return await ctx.brain.query(prompt, tier=Tier.FAST, use_conversation=False)
 
 
 async def get_yesterday_summary(ctx):
+    from pa.core.tier import Tier
+    from pa.plugins.finance.merchants import categorize_transactions
     repo = FinanceRepository(ctx.store)
     yesterday = (datetime.date.today() - datetime.timedelta(days=1)).isoformat()
     balances = await repo.get_latest_balances()
@@ -119,11 +137,14 @@ async def get_yesterday_summary(ctx):
         return None
     balance_str = "\n".join(f"{b['name']}: ${b['balance']:,.2f}" for b in wf_balances) if wf_balances else "No balance data"
     if yesterday_txns:
+        await categorize_transactions(ctx.store, yesterday_txns)
         total = sum(t['amount'] for t in yesterday_txns)
-        txn_lines = "\n".join(f"  {t['description'][:35]}: ${t['amount']:,.2f}" for t in yesterday_txns[:10])
+        txn_lines = "\n".join(
+            f"  {t['description'][:35]}: ${t['amount']:,.2f} [{t.get('learned_category') or 'Uncategorized'}]"
+            for t in yesterday_txns[:10]
+        )
         txn_str = f"Yesterday's spending (${total:,.2f} total):\n{txn_lines}"
     else:
         txn_str = "No spending yesterday."
-    from pa.core.tier import Tier
     prompt = f"Give Steven a brief friendly morning financial update.\n\nWells Fargo balances:\n{balance_str}\n\n{txn_str}\n\nKeep it to 3-4 sentences. Speak like Dumbledore. Flag anything concerning."
-    return await ctx.brain.query(prompt, tier=Tier.FAST)
+    return await ctx.brain.query(prompt, tier=Tier.FAST, use_conversation=False)

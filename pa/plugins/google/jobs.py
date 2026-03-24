@@ -1,7 +1,10 @@
 """Scheduled Gmail check job - unified email triage + bill extraction + learning."""
 from __future__ import annotations
+import logging
 from datetime import datetime
 from pa.plugins import Job
+
+log = logging.getLogger(__name__)
 
 
 async def check_gmail(ctx) -> None:
@@ -13,8 +16,7 @@ async def check_gmail(ctx) -> None:
     from pa.plugins.google.gmail import get_unread_since
     from pa.plugins.google.triage import classify_emails_batch
     from pa.plugins.google.calendar import create_event
-    from pa.plugins.finance.repository import FinanceRepository
-    import json
+    from pa.plugins.finance.advisor import save_bills_to_db
 
     try:
         gmail = gmail_service(ctx.vault)
@@ -63,8 +65,7 @@ Speak results only as JSON array, no markdown."""
     classified = {r['id']: r for r in results if isinstance(r, dict) and 'id' in r}
 
     notifications = []
-    repo = FinanceRepository(ctx.store)
-    bills_updated = []
+    pending_bills = []
 
     for em in emails:
         r = classified.get(em['id'])
@@ -90,54 +91,42 @@ Speak results only as JSON array, no markdown."""
             icon = "🔴" if urgency == "high" else "📧"
             notifications.append(f"{icon} {summary}{event_note}")
 
-        # Handle bill data extraction - runs regardless of notify
+        # Collect bill data for batch save - runs regardless of notify
         bill = r.get('bill')
         if bill and bill.get('balance') and float(bill.get('balance', 0)) > 0:
+            pending_bills.append(bill)
+
+    # Save all extracted bills via the advisor's save_bills_to_db (handles
+    # finance_accounts, finance_balances, AND finance_debts in one shot)
+    bills_updated = []
+    if pending_bills:
+        try:
+            saved = await save_bills_to_db(ctx, pending_bills)
+            if saved:
+                bills_updated = [
+                    f"{b.get('institution', '?')}: ${float(b['balance']):,.2f}"
+                    for b in pending_bills
+                ]
+                log.info("Saved %d/%d bills from email", saved, len(pending_bills))
+        except Exception as e:
+            log.error("Bill save failed (non-fatal): %s", e, exc_info=True)
+
+    # Create calendar events for bill due dates (separate from DB save so
+    # a calendar failure doesn't block persistence)
+    for bill in pending_bills:
+        due_date = bill.get('due_date')
+        if due_date:
             try:
                 institution = bill.get('institution', 'Unknown')
-                account_name = bill.get('account_name', institution)
-                balance = float(bill['balance'])
                 minimum = bill.get('minimum_payment')
-                due_date = bill.get('due_date')
-                account_type = bill.get('account_type', 'credit_card')
-                status = bill.get('status', 'current')
-
-                existing = await repo.get_accounts()
-                existing_map = {(a['institution'].lower(), a['name'].lower()): a['id'] for a in existing}
-                key = (institution.lower(), account_name.lower())
-
-                if key in existing_map:
-                    account_id = existing_map[key]
-                else:
-                    account_id = await repo.add_account(
-                        institution=institution,
-                        name=account_name,
-                        account_type=account_type,
-                    )
-
-                await repo.add_balance(
-                    account_id=account_id,
-                    balance=balance,
-                    minimum_payment=float(minimum) if minimum else None,
-                    due_date=due_date,
-                )
-
-                # Create calendar event for due date
-                if due_date:
-                    try:
-                        min_str = f"${float(minimum):,.2f} min" if minimum else ""
-                        create_event(cal, {
-                            'title': f"💳 {institution} Payment Due {min_str}".strip(),
-                            'date': due_date,
-                            'duration_minutes': 30,
-                        })
-                    except Exception:
-                        pass
-
-                bills_updated.append(f"{institution}: ${balance:,.2f}")
-
-            except Exception as e:
-                print(f"Bill update error: {e}")
+                min_str = f"${float(minimum):,.2f} min" if minimum else ""
+                create_event(cal, {
+                    'title': f"💳 {institution} Payment Due {min_str}".strip(),
+                    'date': due_date,
+                    'duration_minutes': 30,
+                })
+            except Exception:
+                pass
 
     # Save timestamp
     now = int(datetime.now().timestamp())

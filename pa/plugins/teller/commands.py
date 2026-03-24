@@ -38,6 +38,7 @@ async def handle_teller_nl(ctx: AppContext, text: str, update: Update) -> str:
 
     # Merchant search - "how much at X" or "spent at X"
     import re
+    from pa.plugins.finance.merchants import get_category
     merchant_match = re.search(
         r"(?:how much|spent?|spend|at|on)\s+(?:at\s+|on\s+)?([a-zA-Z0-9 &\']+?)(?:\s+(?:in|over|last|this|the).*)?$",
         tl
@@ -45,7 +46,9 @@ async def handle_teller_nl(ctx: AppContext, text: str, update: Update) -> str:
     if merchant_match and any(w in tl for w in ["how much", "spent at", "spend at", "at ", "how often"]):
         merchant = merchant_match.group(1).strip()
         if len(merchant) > 2:
-            await update.message.reply_text(f"Searching transactions for {merchant}...")
+            category = await get_category(ctx.store, merchant)
+            label = f"{merchant} ({category})" if category else merchant
+            await update.message.reply_text(f"Searching transactions for {label}...")
             return await get_spending_by_merchant(ctx, merchant)
 
     return None

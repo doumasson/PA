@@ -114,7 +114,17 @@ class PABot:
     async def send_message(self, text: str) -> None:
         user_id = self._config.get("telegram_user_id")
         if self._app and user_id:
-            await self._app.bot.send_message(chat_id=user_id, text=text)
+            # Split long messages for Telegram's 4096 char limit
+            while text:
+                chunk = text[:4000]
+                if len(text) > 4000:
+                    split_at = chunk.rfind('\n')
+                    if split_at > 0:
+                        chunk = text[:split_at]
+                    text = text[len(chunk):].lstrip('\n')
+                else:
+                    text = ""
+                await self._app.bot.send_message(chat_id=user_id, text=chunk)
 
     def _check_auth(self, update: Update) -> bool:
         allowed = self._config.get("telegram_user_id", 0)
@@ -331,12 +341,29 @@ class PABot:
             try:
                 result = await matched.handler(ctx, text, update)
                 if result:
-                    await update.message.reply_text(result)
+                    await self._send_long(update, result)
             except Exception as e:
                 await update.message.reply_text(f"Error: {e}")
         else:
             try:
                 response = await self._brain.query(text)
-                await update.message.reply_text(response)
+                await self._send_long(update, response)
             except Exception as e:
                 await update.message.reply_text(f"Error: {e}")
+
+    @staticmethod
+    async def _send_long(update: Update, text: str, chunk_size: int = 4000) -> None:
+        """Send long messages split into Telegram-safe chunks."""
+        if len(text) <= chunk_size:
+            await update.message.reply_text(text)
+            return
+        # Split on newlines near the limit
+        while text:
+            if len(text) <= chunk_size:
+                await update.message.reply_text(text)
+                break
+            split_at = text.rfind('\n', 0, chunk_size)
+            if split_at == -1:
+                split_at = chunk_size
+            await update.message.reply_text(text[:split_at])
+            text = text[split_at:].lstrip('\n')
