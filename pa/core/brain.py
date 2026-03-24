@@ -128,6 +128,12 @@ class Brain:
     ) -> str:
         self._check_rate_limit()
         model = self.select_model(tier)
+
+        # Detect preferences BEFORE building prompt so they're included immediately
+        learned = None
+        if use_conversation:
+            learned = await self._detect_preference(user_message)
+
         prompt = system_prompt or self.build_system_prompt()
 
         estimated_cost = _COST_PER_1K_TOKENS[tier] * 2
@@ -165,19 +171,21 @@ class Brain:
 
         result = response.content[0].text
 
+        # Acknowledge the learned preference in the response
+        if learned:
+            result = f"📝 Noted — I'll remember that.\n\n{result}"
+
         # Remember this exchange
         if use_conversation:
             await self.remember_message("user", user_message)
             await self.remember_message("assistant", result)
-            # Self-teaching: detect preferences and corrections
-            await self._detect_preference(user_message)
 
         return result
 
-    async def _detect_preference(self, message: str) -> None:
-        """Auto-detect user preferences and corrections from messages."""
+    async def _detect_preference(self, message: str) -> str | None:
+        """Auto-detect user preferences and corrections from messages.
+        Returns the saved preference text if one was detected, else None."""
         ml = message.lower()
-        # Correction patterns
         correction_phrases = [
             "don't ", "dont ", "stop ", "never ", "quit ",
             "i don't want", "i dont want", "i don't care", "i dont care",
@@ -187,8 +195,10 @@ class Brain:
             "remember that", "keep in mind", "from now on",
         ]
         if any(phrase in ml for phrase in correction_phrases):
-            # Save the preference directly — it's cheap, no API call needed
-            await self.learn_preference(message.strip()[:200], learned_from="auto_detected")
+            pref = message.strip()[:200]
+            await self.learn_preference(pref, learned_from="auto_detected")
+            return pref
+        return None
 
     async def log_error(self, source: str, error: Exception) -> None:
         """Self-healing: log errors to DB for tracking and pattern detection."""

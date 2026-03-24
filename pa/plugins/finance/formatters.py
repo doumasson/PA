@@ -41,6 +41,33 @@ def format_due_summary(balances: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+def format_trend_summary(monthly: list[dict[str, Any]], detail_month: str | None = None,
+                         categories: list[dict[str, Any]] | None = None) -> str:
+    if not monthly:
+        return "No transaction history available for trends."
+    lines = ["**Monthly Spending Trends**\n"]
+    prev_spending = None
+    for m in monthly:
+        spending = m["spending"]
+        income = m["income"]
+        change = ""
+        if prev_spending and prev_spending > 0:
+            pct = ((spending - prev_spending) / prev_spending) * 100
+            arrow = "📈" if pct > 0 else "📉"
+            change = f" {arrow} {pct:+.0f}%"
+        surplus = income - spending
+        surplus_str = f"  (+${surplus:,.0f} surplus)" if surplus > 0 else f"  (-${abs(surplus):,.0f} deficit)" if surplus < 0 else ""
+        lines.append(f"  {m['month']}: ${spending:,.0f} spent / ${income:,.0f} earned{change}{surplus_str}")
+        prev_spending = spending
+
+    if detail_month and categories:
+        lines.append(f"\n**{detail_month} Breakdown**\n")
+        for c in categories:
+            lines.append(f"  {c['category']}: ${c['total']:,.2f} ({c['txn_count']} txns)")
+
+    return "\n".join(lines)
+
+
 def format_spending_summary(transactions: list[dict[str, Any]], period: str) -> str:
     if not transactions:
         return f"No transactions found for {period}."

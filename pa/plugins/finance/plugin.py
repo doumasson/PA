@@ -3,7 +3,7 @@ from pa.plugins import PluginBase, Command, NLHandler
 from pa.plugins.finance.nl import handle_finance_nl
 from pa.plugins.finance.advisor_commands import handle_advisor, handle_debt_update, handle_advisor_nl
 from pa.plugins.finance.commands import (
-    handle_balance, handle_debt, handle_due, handle_spending,
+    handle_balance, handle_debt, handle_due, handle_spending, handle_trend,
     handle_plan, handle_scrape, handle_schedule, handle_backup,
 )
 from pa.plugins.finance.jobs import get_finance_jobs
@@ -29,6 +29,7 @@ class FinancePlugin(PluginBase):
             Command(name="debt", description="Debt summary", handler=handle_debt),
             Command(name="due", description="Upcoming payments", handler=handle_due),
             Command(name="spending", description="Spending breakdown", handler=handle_spending, aliases=["spend"]),
+            Command(name="trend", description="Monthly spending trends", handler=handle_trend, aliases=["trends"]),
             Command(name="plan", description="Debt payoff plan (AI)", handler=handle_plan),
             Command(name="scrape", description="Force a scrape", handler=handle_scrape),
             Command(name="schedule", description="View schedule", handler=handle_schedule),

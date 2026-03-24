@@ -61,6 +61,31 @@ class FinanceRepository:
         params.append(limit)
         return await self._store.fetchall(query, tuple(params))
 
+    async def get_monthly_spending(self, months: int = 6) -> list[dict[str, Any]]:
+        """Get spending totals by month for the last N months."""
+        return await self._store.fetchall(
+            """SELECT strftime('%Y-%m', date) AS month,
+                      SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END) AS spending,
+                      SUM(CASE WHEN amount < 0 THEN ABS(amount) ELSE 0 END) AS income,
+                      COUNT(*) AS txn_count
+               FROM finance_transactions
+               WHERE date >= date('now', ? || ' months')
+               GROUP BY month ORDER BY month""",
+            (str(-months),),
+        )
+
+    async def get_monthly_by_category(self, month: str) -> list[dict[str, Any]]:
+        """Get spending by category for a specific month (YYYY-MM)."""
+        return await self._store.fetchall(
+            """SELECT COALESCE(category, 'Uncategorized') AS category,
+                      SUM(amount) AS total,
+                      COUNT(*) AS txn_count
+               FROM finance_transactions
+               WHERE strftime('%Y-%m', date) = ? AND amount > 0
+               GROUP BY category ORDER BY total DESC""",
+            (month,),
+        )
+
     async def log_scrape(self, institution: str, status: str, account_id: int | None = None,
                          error_message: str | None = None, duration_seconds: float | None = None) -> None:
         await self._store.execute(

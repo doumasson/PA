@@ -7,7 +7,8 @@ from typing import Any
 from pa.plugins import AppContext
 from pa.plugins.finance.repository import FinanceRepository
 from pa.plugins.finance.formatters import (
-    format_balance_summary, format_debt_summary, format_due_summary, format_spending_summary,
+    format_balance_summary, format_debt_summary, format_due_summary,
+    format_spending_summary, format_trend_summary,
 )
 
 _scrape_lock = asyncio.Lock()
@@ -62,6 +63,21 @@ async def handle_spending(ctx: AppContext, update: Any, context: Any) -> str:
         period = " ".join(context.args)
     txns = await _repo(ctx).get_transactions(limit=500)
     return format_spending_summary(txns, period)
+
+
+async def handle_trend(ctx: AppContext, update: Any, context: Any) -> str:
+    repo = _repo(ctx)
+    monthly = await repo.get_monthly_spending(months=6)
+    # Optionally show category breakdown for a specific month
+    detail_month = context.args[0] if context.args else None
+    categories = None
+    if detail_month:
+        categories = await repo.get_monthly_by_category(detail_month)
+    elif monthly:
+        # Default: show breakdown for most recent month
+        detail_month = monthly[-1]["month"]
+        categories = await repo.get_monthly_by_category(detail_month)
+    return format_trend_summary(monthly, detail_month, categories)
 
 
 async def handle_plan(ctx: AppContext, update: Any, context: Any) -> str:

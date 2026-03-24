@@ -16,7 +16,7 @@ from pa.plugins import Command, AppContext
 
 
 class PABot:
-    _builtin_commands = {"unlock", "lock", "status", "help", "plugins", "addcred", "creds", "delcred"}
+    _builtin_commands = {"unlock", "lock", "status", "help", "plugins", "addcred", "creds", "delcred", "prefs"}
 
     def __init__(self, config: Any, vault: Any, store: Any, brain: Any, mfa_bridge: Any):
         self._config = config
@@ -49,6 +49,7 @@ class PABot:
             "/creds - List stored credentials",
             "/delcred - Remove credentials",
             "/status - System status",
+            "/prefs - View/clear learned preferences",
             "/plugins - Active plugins",
         ]
         for name, cmd in sorted(self._command_registry.items()):
@@ -68,6 +69,7 @@ class PABot:
             "creds": self._handle_creds,
             "delcred": self._handle_delcred,
             "status": self._handle_status,
+            "prefs": self._handle_prefs,
             "help": self._handle_help,
             "plugins": self._handle_plugins,
         }
@@ -173,6 +175,26 @@ class PABot:
         else:
             text = "No plugins loaded."
         await update.message.reply_text(text)
+
+    async def _handle_prefs(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if not self._check_auth(update):
+            return
+        arg = context.args[0].lower() if context.args else None
+        if arg == "clear":
+            if self._store:
+                await self._store.execute("DELETE FROM core_preferences")
+            self._brain._preferences.clear()
+            await update.message.reply_text("All preferences cleared.")
+            return
+        prefs = self._brain._preferences
+        if not prefs:
+            await update.message.reply_text("No preferences learned yet. Just tell me what you like or don't like!")
+            return
+        lines = [f"**Learned Preferences** ({len(prefs)} total)\n"]
+        for i, p in enumerate(prefs[-15:], 1):
+            lines.append(f"{i}. {p}")
+        lines.append("\nUse /prefs clear to reset.")
+        await update.message.reply_text("\n".join(lines))
 
     async def _handle_addcred(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not self._check_auth(update):
