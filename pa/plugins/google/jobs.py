@@ -143,7 +143,7 @@ Speak results only as JSON array, no markdown."""
 
     # Log bill updates silently (no message unless something new)
     if bills_updated:
-        print(f"Bills updated from email: {', '.join(bills_updated)}")
+        log.info("Bills updated from email: %s", ', '.join(bills_updated))
 
 
 def get_google_jobs() -> list[Job]:
