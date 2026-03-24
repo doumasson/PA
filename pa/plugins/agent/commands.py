@@ -33,7 +33,7 @@ def _start_agent() -> str:
          "set -a && source ~/pa/.env && set +a && "
          "python3 " + str(AGENT_SCRIPT)],
         stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL, start_new_session=True,
     )
     return "DungeonMind build agent started. Updates coming each iteration."
 
@@ -104,7 +104,7 @@ async def handle_agent_query(ctx: AppContext, text: str, update: Update) -> str 
     start_phrases = [
         "start the build", "start build agent", "start the agent",
         "run the build", "run build agent", "run the agent",
-        "build dungeonmind", "start dungeonmind", "run dungeonmind",
+        "build dungeonmind", "build dungeon mind", "start dungeonmind", "start dungeon mind", "run dungeonmind",
         "build the game", "start building the game",
         "fire up the build", "fire up the agent",
         "kick off the build", "kick off the agent",
@@ -130,7 +130,7 @@ async def handle_agent_query(ctx: AppContext, text: str, update: Update) -> str 
         "how's dungeonmind", "how's the build", "how's the agent",
         "what did the agent build", "what's the agent doing",
         "is the agent running", "is the build running",
-        "dungeonmind status",
+        "dungeonmind status", "dungeon mind status", "status of dungeon", "dungeon mind",
     ]
     if any(phrase in t for phrase in status_phrases):
         running = "RUNNING" if _agent_running() else "IDLE"

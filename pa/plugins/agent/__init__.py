@@ -26,7 +26,7 @@ class AgentPlugin(PluginBase):
             NLHandler(
                 keywords=[
                     "build agent", "the agent", "the build",
-                    "dungeonmind", "the game",
+                    "dungeonmind", "dungeon mind", "the game", "game status", "start building", "stop building", "fire up", "kick off",
                 ],
                 handler=handle_agent_query,
                 description="Control and query the DungeonMind build agent",
