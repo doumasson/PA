@@ -28,6 +28,47 @@ async def check_gmail(ctx) -> None:
     if not emails:
         return
 
+    # Pre-filter: drop emails matching blocklist BEFORE sending to Haiku (zero API cost)
+    try:
+        blocks = await ctx.store.fetchall("SELECT block_type, pattern FROM google_email_blocks")
+    except Exception:
+        blocks = []
+    if blocks:
+        filtered = []
+        for em in emails:
+            sender_lower = em['sender'].lower()
+            subject_lower = em['subject'].lower()
+            snippet_lower = em.get('snippet', '').lower()
+            blocked = False
+            for b in blocks:
+                pat = b['pattern'].lower()
+                if b['block_type'] == 'sender' and pat in sender_lower:
+                    blocked = True
+                elif b['block_type'] == 'keyword' and (pat in subject_lower or pat in sender_lower or pat in snippet_lower):
+                    blocked = True
+                elif b['block_type'] == 'subject' and pat in subject_lower:
+                    blocked = True
+            if not blocked:
+                filtered.append(em)
+        if len(filtered) < len(emails):
+            log.info("Email blocklist filtered %d/%d emails", len(emails) - len(filtered), len(emails))
+        emails = filtered
+        if not emails:
+            return
+
+    # Load kid sports dynamically from DB
+    maddox_sport = "BASKETBALL"
+    asher_sport = "SOCCER"
+    try:
+        row = await ctx.store.fetchone("SELECT value FROM google_state WHERE key = 'kid_maddox_sport'")
+        if row:
+            maddox_sport = row['value'].upper()
+        row = await ctx.store.fetchone("SELECT value FROM google_state WHERE key = 'kid_asher_sport'")
+        if row:
+            asher_sport = row['value'].upper()
+    except Exception:
+        pass
+
     # Load user preferences to inject into triage prompt
     prefs = ctx.brain._preferences[-10:] if ctx.brain._preferences else []
     pref_block = ""
@@ -36,7 +77,7 @@ async def check_gmail(ctx) -> None:
         pref_block = f"\n\nUser preferences (MUST follow these):\n{pref_lines}\n"
 
     # One batch Haiku call - classify AND extract financial data simultaneously
-    COMBINED_SYSTEM = f"""You are an email assistant for Steven Hemenover, a busy dad with two sons: Maddox (12, plays BASKETBALL) and Asher (10, plays SOCCER).
+    COMBINED_SYSTEM = f"""You are an email assistant for Steven Hemenover, a busy dad with two sons: Maddox (12, plays {maddox_sport}) and Asher (10, plays {asher_sport}).
 
 For each email return a JSON object in an array:
 {{
@@ -69,11 +110,11 @@ NOTIFY — only these:
 - Large purchases or transactions over $100
 
 Kids sports — IMPORTANT:
-- Maddox plays BASKETBALL (not soccer)
-- Asher plays SOCCER (not basketball)
-- Calendar title format: "Maddox Basketball" or "Asher Soccer"
-- If an email mentions soccer, it's about ASHER
-- If an email mentions basketball, it's about MADDOX
+- Maddox plays {maddox_sport}
+- Asher plays {asher_sport}
+- Calendar title format: "Maddox {maddox_sport.title()}" or "Asher {asher_sport.title()}"
+- If an email mentions {asher_sport.lower()}, it's about ASHER
+- If an email mentions {maddox_sport.lower()}, it's about MADDOX
 
 Bill extraction rules:
 - Extract balance from any statement/bill/payment email
