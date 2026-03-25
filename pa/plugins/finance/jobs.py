@@ -479,6 +479,160 @@ async def job_weekly_digest(ctx) -> None:
     await _retry(_do_digest, ctx, source="weekly_digest")
 
 
+async def job_budget_nag(ctx) -> None:
+    """3x daily budget check — pure SQL, zero API calls.
+    Checks each budget category and nags if approaching or over limit."""
+    if not ctx.vault.is_unlocked:
+        return
+
+    async def _do_nag():
+        import datetime
+        today = datetime.date.today()
+        month = today.strftime('%Y-%m')
+        day = today.day
+
+        budgets = await ctx.store.fetchall("SELECT * FROM finance_budgets")
+        if not budgets:
+            return
+
+        alerts = []
+        for b in budgets:
+            cat = b['category']
+            limit = b['monthly_limit']
+            alert_pct = b.get('alert_at_pct', 0.8)
+
+            row = await ctx.store.fetchone(
+                """SELECT COALESCE(SUM(amount), 0) AS spent
+                   FROM finance_transactions
+                   WHERE amount > 0 AND category = ? AND strftime('%Y-%m', date) = ?""",
+                (cat, month),
+            )
+            spent = row['spent'] if row else 0
+            pct = spent / limit if limit > 0 else 0
+
+            # Determine alert type
+            if pct >= 1.0:
+                alert_type = "over"
+                msg = f"🔴 {cat}: ${spent:,.0f} / ${limit:,.0f} — OVER BUDGET by ${spent - limit:,.0f}"
+            elif pct >= alert_pct:
+                alert_type = "warning"
+                remaining = limit - spent
+                # Calculate how many days left and daily allowance
+                if today.month == 12:
+                    month_end = datetime.date(today.year + 1, 1, 1)
+                else:
+                    month_end = datetime.date(today.year, today.month + 1, 1)
+                days_left = (month_end - today).days
+                daily = remaining / days_left if days_left > 0 else 0
+                msg = f"🟡 {cat}: ${spent:,.0f} / ${limit:,.0f} ({pct:.0%}) — ${remaining:,.0f} left = ~${daily:,.0f}/day"
+            else:
+                continue
+
+            # Deduplicate: only send each alert type once per day
+            already = await ctx.store.fetchone(
+                """SELECT 1 FROM finance_budget_alerts
+                   WHERE category = ? AND month = ? AND alert_type = ?
+                   AND date(sent_at) = date('now')""",
+                (cat, month, alert_type),
+            )
+            if already:
+                continue
+
+            await ctx.store.execute(
+                """INSERT INTO finance_budget_alerts (category, month, alert_type)
+                   VALUES (?, ?, ?)
+                   ON CONFLICT(category, month, alert_type) DO UPDATE SET sent_at=CURRENT_TIMESTAMP""",
+                (cat, month, alert_type),
+            )
+            alerts.append(msg)
+
+        if alerts:
+            header = "**Bart's Budget Check**\n" if len(alerts) > 1 else ""
+            await ctx.bot.send_message(header + "\n".join(alerts))
+
+    await _retry(_do_nag, ctx, source="budget_nag")
+
+
+async def job_bart_daily_nag(ctx) -> None:
+    """Evening nag from Bart — pure SQL, zero API calls.
+    Summarizes today's damage and reminds about upcoming obligations."""
+    if not ctx.vault.is_unlocked:
+        return
+
+    async def _do_nag():
+        import datetime
+        from pa.plugins.finance.repository import FinanceRepository
+        repo = FinanceRepository(ctx.store)
+
+        today = datetime.date.today().isoformat()
+        month = datetime.date.today().strftime('%Y-%m')
+
+        # Today's spending
+        txns = await repo.get_transactions(since_date=today, limit=200)
+        today_debits = [t for t in txns if t['date'] == today and t['amount'] > 0]
+        today_total = sum(t['amount'] for t in today_debits)
+
+        # Month-to-date spending
+        row = await ctx.store.fetchone(
+            """SELECT COALESCE(SUM(amount), 0) AS spent
+               FROM finance_transactions
+               WHERE amount > 0 AND strftime('%Y-%m', date) = ?""",
+            (month,),
+        )
+        mtd = row['spent'] if row else 0
+
+        # Total budget
+        budget_row = await ctx.store.fetchone(
+            "SELECT COALESCE(SUM(monthly_limit), 0) AS total FROM finance_budgets"
+        )
+        total_budget = budget_row['total'] if budget_row else 0
+
+        # Checking balance
+        balances = await repo.get_latest_balances()
+        checking = sum(b['balance'] for b in balances if b['type'] in ('checking', 'depository'))
+
+        # Unpaid bills
+        upcoming = await ctx.store.fetchall(
+            """SELECT name, amount, due_date FROM finance_bills
+               WHERE paid_this_cycle = 0 AND due_date IS NOT NULL
+               ORDER BY due_date LIMIT 5"""
+        )
+        bills_total = sum(b['amount'] or 0 for b in upcoming)
+
+        parts = ["**Bart's Evening Report**\n"]
+
+        if today_total > 0:
+            top_txns = sorted(today_debits, key=lambda t: t['amount'], reverse=True)[:3]
+            txn_list = ", ".join(f"{t['description'][:20]} ${t['amount']:,.0f}" for t in top_txns)
+            parts.append(f"Today: ${today_total:,.2f} spent ({txn_list})")
+        else:
+            parts.append("Today: $0 spent — nice discipline.")
+
+        if total_budget > 0:
+            remaining = total_budget - mtd
+            pct = mtd / total_budget * 100
+            if remaining > 0:
+                parts.append(f"Month: ${mtd:,.0f} / ${total_budget:,.0f} budget ({pct:.0f}%) — ${remaining:,.0f} left")
+            else:
+                parts.append(f"Month: ${mtd:,.0f} / ${total_budget:,.0f} — ⚠️ OVER by ${abs(remaining):,.0f}")
+
+        parts.append(f"Checking: ${checking:,.2f}")
+
+        if upcoming:
+            bill_lines = [f"  {b['name']}: ${b['amount'] or 0:,.0f} due {b['due_date']}" for b in upcoming[:3]]
+            parts.append(f"Next bills (${bills_total:,.0f} total):\n" + "\n".join(bill_lines))
+
+        available = checking - bills_total
+        if available < 200:
+            parts.append(f"\n⚠️ After bills you'll have ~${available:,.0f}. Watch it.")
+        elif available < 500:
+            parts.append(f"\nAfter bills: ~${available:,.0f}. Tight but manageable.")
+
+        await ctx.bot.send_message("\n".join(parts))
+
+    await _retry(_do_nag, ctx, source="bart_daily_nag")
+
+
 def get_finance_jobs() -> list[Job]:
     return [
         Job(name="morning_sync", handler=job_morning_sync,
@@ -495,4 +649,10 @@ def get_finance_jobs() -> list[Job]:
             trigger="cron", kwargs={"hour": 12, "minute": 0}),
         Job(name="weekly_digest", handler=job_weekly_digest,
             trigger="cron", kwargs={"day_of_week": "sat", "hour": 9, "minute": 0}),
+        Job(name="budget_nag_morning", handler=job_budget_nag,
+            trigger="cron", kwargs={"hour": 9, "minute": 0}),
+        Job(name="budget_nag_afternoon", handler=job_budget_nag,
+            trigger="cron", kwargs={"hour": 15, "minute": 0}),
+        Job(name="bart_evening_report", handler=job_bart_daily_nag,
+            trigger="cron", kwargs={"hour": 20, "minute": 0}),
     ]

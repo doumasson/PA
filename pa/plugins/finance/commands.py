@@ -322,6 +322,112 @@ async def handle_forecast(ctx: AppContext, update: Any, context: Any) -> str:
     return "\n".join(lines)
 
 
+async def handle_budget(ctx: AppContext, update: Any, context: Any) -> str:
+    """View budget vs actual spending. Zero API calls."""
+    import datetime
+    month = datetime.date.today().strftime('%Y-%m')
+    budgets = await ctx.store.fetchall("SELECT * FROM finance_budgets ORDER BY monthly_limit DESC")
+    if not budgets:
+        return "No budgets set. Use /budget_set <category> <amount>\nExample: /budget_set Food 400"
+
+    lines = [f"**Budget vs Actual — {month}**\n"]
+    total_budget = 0
+    total_spent = 0
+    for b in budgets:
+        cat = b['category']
+        limit = b['monthly_limit']
+        total_budget += limit
+        # Get actual spending for this category this month
+        row = await ctx.store.fetchone(
+            """SELECT COALESCE(SUM(amount), 0) AS spent
+               FROM finance_transactions
+               WHERE amount > 0 AND category = ? AND strftime('%Y-%m', date) = ?""",
+            (cat, month),
+        )
+        spent = row['spent'] if row else 0
+        total_spent += spent
+        pct = (spent / limit * 100) if limit > 0 else 0
+        bar = _budget_bar(pct)
+        status = "🔴" if pct >= 100 else "🟡" if pct >= 80 else "🟢"
+        lines.append(f"  {status} {cat}: ${spent:,.0f} / ${limit:,.0f} ({pct:.0f}%) {bar}")
+
+    # Unbudgeted spending
+    row = await ctx.store.fetchone(
+        """SELECT COALESCE(SUM(amount), 0) AS spent
+           FROM finance_transactions
+           WHERE amount > 0 AND strftime('%Y-%m', date) = ?""",
+        (month,),
+    )
+    all_spent = row['spent'] if row else 0
+    unbudgeted = all_spent - total_spent
+    if unbudgeted > 0:
+        lines.append(f"\n  ⚪ Unbudgeted: ${unbudgeted:,.0f}")
+
+    lines.append(f"\n  **Total: ${all_spent:,.0f} / ${total_budget:,.0f} budgeted**")
+    remaining = total_budget - all_spent
+    if remaining > 0:
+        days_left = _days_left_in_month()
+        daily = remaining / days_left if days_left > 0 else 0
+        lines.append(f"  ${remaining:,.0f} left = ~${daily:,.0f}/day for {days_left} days")
+    else:
+        lines.append(f"  ⚠️ Over budget by ${abs(remaining):,.0f}")
+
+    return "\n".join(lines)
+
+
+def _budget_bar(pct: float) -> str:
+    filled = min(int(pct / 10), 10)
+    return "█" * filled + "░" * (10 - filled)
+
+
+def _days_left_in_month() -> int:
+    import datetime
+    today = datetime.date.today()
+    if today.month == 12:
+        last = datetime.date(today.year + 1, 1, 1)
+    else:
+        last = datetime.date(today.year, today.month + 1, 1)
+    return (last - today).days
+
+
+async def handle_budget_set(ctx: AppContext, update: Any, context: Any) -> str:
+    """Set a monthly budget for a category. Zero API calls."""
+    args = context.args or []
+    if len(args) < 2:
+        return ("Usage: /budget_set <category> <amount> [alert_pct]\n"
+                "Example: /budget_set Food 400\n"
+                "Example: /budget_set Gas 200 70  (alert at 70%)\n\n"
+                "Common categories: Food, Gas, Shopping, Subscriptions, Entertainment, Transport, Bills")
+    category = args[0]
+    try:
+        amount = float(args[1])
+    except ValueError:
+        return "Amount must be a number."
+    alert_pct = float(args[2]) / 100 if len(args) > 2 else 0.8
+    await ctx.store.execute(
+        """INSERT INTO finance_budgets (category, monthly_limit, alert_at_pct)
+           VALUES (?, ?, ?)
+           ON CONFLICT(category) DO UPDATE SET
+           monthly_limit=excluded.monthly_limit, alert_at_pct=excluded.alert_at_pct""",
+        (category, amount, alert_pct),
+    )
+    return f"Budget set: {category} = ${amount:,.0f}/month (alert at {alert_pct*100:.0f}%)"
+
+
+async def handle_budget_del(ctx: AppContext, update: Any, context: Any) -> str:
+    """Remove a budget category."""
+    args = context.args or []
+    if not args:
+        return "Usage: /budget_del <category>"
+    category = " ".join(args)
+    rows = await ctx.store.execute_rowcount(
+        "DELETE FROM finance_budgets WHERE LOWER(category) = LOWER(?)", (category,)
+    )
+    if rows == 0:
+        return f"No budget found for '{category}'. Use /budget to see all."
+    return f"Removed budget for {category}."
+
+
 async def handle_schedule(ctx: AppContext, update: Any, context: Any) -> str:
     schedule = ctx.config.get("schedule", {})
     lines = ["**Current Schedule**\n"]

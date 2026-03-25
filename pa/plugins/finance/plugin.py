@@ -4,6 +4,7 @@ from pa.plugins.finance.nl import handle_finance_nl, handle_affordability_nl
 from pa.plugins.finance.advisor_commands import handle_advisor, handle_debt_update, handle_advisor_nl
 from pa.plugins.finance.commands import (
     handle_balance, handle_bill_add, handle_bill_paid, handle_bills,
+    handle_budget, handle_budget_set, handle_budget_del,
     handle_debt, handle_due, handle_forecast, handle_spending, handle_trend,
     handle_plan, handle_scrape, handle_schedule, handle_backup,
 )
@@ -41,6 +42,9 @@ class FinancePlugin(PluginBase):
             Command(name="bill_add", description="Add a recurring bill", handler=handle_bill_add),
             Command(name="bill_paid", description="Mark bill as paid", handler=handle_bill_paid),
             Command(name="forecast", description="Cash flow forecast", handler=handle_forecast, aliases=["cashflow"]),
+            Command(name="budget", description="Budget vs actual spending", handler=handle_budget),
+            Command(name="budget_set", description="Set a category budget", handler=handle_budget_set),
+            Command(name="budget_del", description="Remove a budget", handler=handle_budget_del),
         ]
 
     def jobs(self) -> list:

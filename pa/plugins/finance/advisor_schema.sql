@@ -46,3 +46,20 @@ CREATE TABLE IF NOT EXISTS finance_bills (
     updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(name)
 );
+
+CREATE TABLE IF NOT EXISTS finance_budgets (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    category TEXT NOT NULL UNIQUE,
+    monthly_limit REAL NOT NULL,
+    alert_at_pct REAL NOT NULL DEFAULT 0.8,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS finance_budget_alerts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    category TEXT NOT NULL,
+    month TEXT NOT NULL,
+    alert_type TEXT NOT NULL,
+    sent_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(category, month, alert_type)
+);
