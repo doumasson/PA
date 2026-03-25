@@ -39,9 +39,30 @@ class FinanceRepository:
         raw = f"{account_id}|{txn_date}|{description}|{amount}"
         return hashlib.sha256(raw.encode()).hexdigest()
 
+    @staticmethod
+    def _amount_dedup_hash(account_id: int, txn_date: str, amount: float) -> str:
+        """Coarse dedup: same account + date + amount = same transaction.
+        Teller often sends both a short and long description for each charge."""
+        raw = f"{account_id}|{txn_date}|{amount}"
+        return hashlib.sha256(raw.encode()).hexdigest()
+
     async def add_transaction(self, account_id: int, date: str, description: str, amount: float,
                               posted_date: str | None = None, category: str | None = None, is_pending: bool = False) -> bool:
         dedup_hash = self._compute_dedup_hash(account_id, date, description, amount)
+        # Also check for same account+date+amount with different description (Teller duplicates)
+        amount_hash = self._amount_dedup_hash(account_id, date, amount)
+        existing = await self._store.fetchone(
+            "SELECT id, description FROM finance_transactions WHERE account_id = ? AND date = ? AND amount = ?",
+            (account_id, date, amount),
+        )
+        if existing:
+            # Keep the longer (more descriptive) version
+            if len(description) > len(existing['description']):
+                await self._store.execute(
+                    "UPDATE finance_transactions SET description = ?, dedup_hash = ? WHERE id = ?",
+                    (description, dedup_hash, existing['id']),
+                )
+            return False  # Not a new transaction
         rows_affected = await self._store.execute_rowcount(
             "INSERT OR IGNORE INTO finance_transactions (account_id, date, posted_date, description, amount, category, dedup_hash, is_pending) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (account_id, date, posted_date, description, amount, category, dedup_hash, is_pending),

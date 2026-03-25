@@ -17,6 +17,20 @@ async def handle_kids_nl(ctx: AppContext, text: str, update: Update) -> str:
     tl = text.lower()
     today = datetime.date.today()
 
+    # Handle corrections about the kids without API calls
+    # e.g. "Asher is a soccer player" / "Maddox plays basketball, not soccer"
+    if any(p in tl for p in ["is a ", "plays ", "is the ", "does ", "doesn't play", "not soccer", "not basketball"]):
+        kid = "asher" if "asher" in tl else "maddox" if "maddox" in tl else None
+        if kid:
+            await ctx.store.execute(
+                "INSERT INTO kids_notes (kid, note, category) VALUES (?, ?, 'correction')",
+                (kid, text.strip()[:200]),
+            )
+            # Also save as a preference so the system learns
+            await ctx.brain.learn_preference(text.strip()[:200], learned_from="kids_correction")
+            return f"Got it — noted about {kid.capitalize()}. I'll remember that."
+        return None  # Not about a specific kid, let other handlers try
+
     # Determine intent via Haiku
     PARSE = """Parse this message about kids (Maddox, 12, basketball; Asher, 10, soccer).
 Return ONLY JSON:

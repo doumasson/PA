@@ -16,6 +16,11 @@ async def handle_finance_nl(ctx: AppContext, text: str, update: Update) -> str:
     tl = text.lower()
     repo = FinanceRepository(ctx.store)
 
+    # Skip merchant categorization if message is about the kids
+    _kid_names = {"maddox", "asher", "the boys", "the kids"}
+    if any(name in tl for name in _kid_names):
+        return None  # Let the kids plugin handle it
+
     # Merchant category corrections: "X is a Y" or "X is not Y"
     if any(phrase in tl for phrase in [
         " is a ", " is an ", " is not ", " isn't ", " isnt ",

@@ -28,34 +28,60 @@ async def check_gmail(ctx) -> None:
     if not emails:
         return
 
+    # Load user preferences to inject into triage prompt
+    prefs = ctx.brain._preferences[-10:] if ctx.brain._preferences else []
+    pref_block = ""
+    if prefs:
+        pref_lines = "\n".join(f"- {p}" for p in prefs)
+        pref_block = f"\n\nUser preferences (MUST follow these):\n{pref_lines}\n"
+
     # One batch Haiku call - classify AND extract financial data simultaneously
-    COMBINED_SYSTEM = """You are an email assistant for Steven Hemenover, a busy dad with two sons Maddox (12) and Asher (10).
+    COMBINED_SYSTEM = f"""You are an email assistant for Steven Hemenover, a busy dad with two sons: Maddox (12, plays BASKETBALL) and Asher (10, plays SOCCER).
 
 For each email return a JSON object in an array:
-{
+{{
   "id": "email id",
   "category": "action|event|important|noise",
   "urgency": "high|normal|low",
   "summary": "max 15 words",
   "notify": true/false,
-  "calendar_event": null or {"title":"...","date":"YYYY-MM-DD","time":"HH:MM or null","duration_minutes":60,"location":"..."},
-  "bill": null or {"institution":"...","account_name":"...","account_type":"credit_card|loan|mortgage|utility","balance":0.00,"minimum_payment":null,"due_date":"YYYY-MM-DD or null","status":"current|past_due|charged_off"}
-}
+  "calendar_event": null or {{"title":"...","date":"YYYY-MM-DD","time":"HH:MM or null","duration_minutes":60,"location":"..."}},
+  "bill": null or {{"institution":"...","account_name":"...","account_type":"credit_card|loan|mortgage|utility","balance":0.00,"minimum_payment":null,"due_date":"YYYY-MM-DD or null","status":"current|past_due|charged_off"}}
+}}
 
-Notification rules:
-- noise = promotions, newsletters, marketing → notify=false
-- action+high = urgent response needed → notify=true
-- event = sports, appointments, school → notify=true, add calendar_event
-- bill/statement emails → notify=false but ALWAYS fill bill field if balance found
-- ALWAYS flag: charge-off warnings, past due, fraud, large transactions → notify=true
+NOISE — always notify=false:
+- Promotions, deals, coupons, marketing, sales emails
+- Newsletters, blog digests, content roundups
+- Social media notifications
+- Screen time requests/reports from kids' devices
+- Automated shipping/tracking updates (unless explicitly high-value)
+- Golf programs, camps, tournaments (unless Steven signed up)
+- Rewards program updates, points notifications
+- Food delivery promotions (Grubhub, DoorDash, etc.)
+- Job alert emails from LinkedIn or job boards
+- App store / subscription renewal receipts under $20
+
+NOTIFY — only these:
+- action+high = urgent response needed (real person expecting reply)
+- event = sports PRACTICES or GAMES with specific date/time → notify=true, add calendar_event
+- ALWAYS flag: charge-off warnings, past due notices, fraud alerts, overdraft → notify=true, urgency=high
+- School notices specifically about Maddox or Asher (not generic newsletters)
+- Large purchases or transactions over $100
+
+Kids sports — IMPORTANT:
+- Maddox plays BASKETBALL (not soccer)
+- Asher plays SOCCER (not basketball)
+- Calendar title format: "Maddox Basketball" or "Asher Soccer"
+- If an email mentions soccer, it's about ASHER
+- If an email mentions basketball, it's about MADDOX
 
 Bill extraction rules:
 - Extract balance from any statement/bill/payment email
 - due_date in YYYY-MM-DD format, assume 2026
-- status: charged_off if email mentions charge-off/collections, past_due if overdue, current otherwise
+- status: charged_off if email mentions charge-off/collections, past_due if overdue
 - Set bill=null if no financial data found
-
-Kids sports: title = "Asher Soccer" or "Maddox Basketball"
+{pref_block}
+When in doubt: noise with notify=false.
 Speak results only as JSON array, no markdown."""
 
     results = await classify_emails_batch(emails, ctx.brain, system_override=COMBINED_SYSTEM)
