@@ -74,7 +74,12 @@ async def get_spending_by_merchant(ctx, merchant, days=30):
     repo = FinanceRepository(ctx.store)
     since = (datetime.date.today() - datetime.timedelta(days=days)).isoformat()
     txns = await repo.get_transactions(since_date=since, limit=500)
-    matches = [t for t in txns if merchant.lower() in t['description'].lower() and t['amount'] > 0]
+    # Fuzzy match: all words in merchant name must appear in the description
+    merchant_words = merchant.lower().split()
+    matches = [
+        t for t in txns
+        if all(w in t['description'].lower() for w in merchant_words) and t['amount'] > 0
+    ]
     if not matches:
         return f"I find no record of spending at {merchant} in the last {days} days."
     await categorize_transactions(ctx.store, matches)
