@@ -30,6 +30,10 @@ class PABot:
         self._intent_registry: dict[str, Any] = {}  # intent_id -> NLHandler
         self._intent_catalog: list[dict] = []  # built after all plugins register
         self._plugin_names: list[str] = []
+        self._scheduler = None
+
+    def set_scheduler(self, scheduler) -> None:
+        self._scheduler = scheduler
 
     def register_command(self, cmd: Command) -> None:
         if cmd.name in self._builtin_commands:
@@ -367,7 +371,7 @@ class PABot:
         """Route a text message through AI intent classification and handlers."""
         ctx = AppContext(
             store=self._store, vault=self._vault, brain=self._brain,
-            bot=self, scheduler=None, config=self._config,
+            bot=self, scheduler=self._scheduler, config=self._config,
         )
 
         # AI-powered intent classification
@@ -380,14 +384,21 @@ class PABot:
                 )
                 if intents:
                     results = []
+                    prior_result = None
                     for intent in intents:
                         handler = self._intent_registry.get(intent.get("intent_id", ""))
                         if handler:
                             try:
-                                result = await handler.handler(ctx, text, update)
+                                # Pass prior handler result as context for chaining
+                                if prior_result:
+                                    chained_text = f"{text}\n\n[Prior result: {prior_result}]"
+                                else:
+                                    chained_text = text
+                                result = await handler.handler(ctx, chained_text, update)
                                 if result:
                                     results.append(result)
-                                    # Learn from successful route (sample to avoid bloat)
+                                    prior_result = result
+                                    # Learn from successful route
                                     if len(self._brain._intent_examples) < 200:
                                         await self._brain.confirm_intent(text, intent["intent_id"])
                             except Exception as e:
@@ -395,6 +406,9 @@ class PABot:
                     if results:
                         combined = "\n\n".join(results)
                         await self._send_long(update, combined)
+                        # Remember the exchange in conversation memory
+                        await self._brain.remember_message("user", text)
+                        await self._brain.remember_message("assistant", combined)
                         return
             except Exception:
                 pass  # Fall through to general conversation on classifier failure

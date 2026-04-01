@@ -42,6 +42,8 @@ async def main() -> None:
         brain=brain, mfa_bridge=mfa_bridge,
     )
 
+    bot.set_scheduler(scheduler)
+
     plugins = discover_plugins()
     plugin_names = [p.name for p in plugins]
     bot.set_plugin_names(plugin_names)

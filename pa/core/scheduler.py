@@ -118,5 +118,27 @@ class PAScheduler:
     async def stop(self) -> None:
         await self._scheduler.__aexit__(None, None, None)
 
+    async def add_dynamic_job(self, name: str, handler: Callable, trigger: str, kwargs: dict) -> None:
+        """Add a job at runtime (for recurring tasks, alerts, etc.)."""
+        _JOB_REGISTRY[name] = handler
+        if trigger == "interval":
+            t = IntervalTrigger(
+                hours=kwargs.get("hours", 0),
+                minutes=kwargs.get("minutes", 0),
+            )
+        else:
+            t = CronTrigger(**kwargs)
+        await self._scheduler.add_schedule(
+            _job_dispatcher, t, id=name, args=[name]
+        )
+
+    async def remove_dynamic_job(self, name: str) -> None:
+        """Remove a dynamically added job."""
+        try:
+            await self._scheduler.remove_schedule(name)
+        except Exception:
+            pass
+        _JOB_REGISTRY.pop(name, None)
+
     def get_job_names(self) -> list[str]:
-        return [j.name for j in self._jobs]
+        return [j.name for j in self._jobs] + [k for k in _JOB_REGISTRY if k not in {j.name for j in self._jobs}]

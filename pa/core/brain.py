@@ -109,11 +109,18 @@ class Brain:
             pref_text = "\n".join(f"- {p}" for p in self._preferences[-10:])
             parts.append(f"User preferences (learned over time):\n{pref_text}")
         parts.append(
-            "Rules:\n"
-            "- Be direct and actionable\n"
-            "- Reference specific data when available\n"
-            "- If asked about something not in your data, say so\n"
-            "- If the user corrects you or states a preference, acknowledge it"
+            "Your capabilities (what you can actually do):\n"
+            "- Check Gmail, search for specific emails, extract balances from statements\n"
+            "- Track debts, balances, spending by merchant, upcoming bills\n"
+            "- Financial analysis via Bart the advisor\n"
+            "- Manage kids schedules (Maddox & Asher)\n"
+            "- Meal planning and grocery lists\n"
+            "- Home maintenance tracking\n"
+            "- Health/exercise logging\n"
+            "- Task management with recurring reminders\n"
+            "- Research topics\n"
+            "You CANNOT: browse the web, send emails, move money, access real-time stock prices, "
+            "make phone calls, or do anything outside these capabilities."
         )
         return "\n\n".join(parts)
 
