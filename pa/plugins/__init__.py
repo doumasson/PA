@@ -116,7 +116,9 @@ class NLHandler:
     keywords: list[str]
     handler: Callable
     description: str = ""
-    priority: int = 0  # higher = checked first
+    priority: int = 0  # higher = checked first (used as keyword fallback tiebreak)
+    intent_id: str = ""  # e.g. "finance.balance" — used by AI intent classifier
+    examples: list[str] = field(default_factory=list)  # seed utterances for classifier
 
 
 # Monkey-patch nl_handlers onto PluginBase so existing plugins get it free

@@ -25,11 +25,17 @@ class TellerPlugin(PluginBase):
                 keywords=["sync", "update accounts", "refresh balance", "pull transactions"],
                 handler=handle_teller_nl,
                 priority=15,
+                intent_id="teller.sync",
+                description="Sync or refresh bank account data from Teller API",
+                examples=["sync my accounts", "refresh my bank data", "pull latest transactions"],
             ),
             NLHandler(
                 keywords=["yesterday", "morning update", "how much did i spend", "last week", "weekly", "7 days", "spent at", "spend at", "spending at", "how much at", "how often at"],
                 handler=handle_teller_nl,
                 priority=15,
+                intent_id="teller.merchant_search",
+                description="Search transactions by merchant name, spending at a specific store, or time-based spending summary",
+                examples=["how much have I spent at Hilltop Liquors", "what did I spend yesterday", "how much at Walmart this month"],
             ),
         ]
 

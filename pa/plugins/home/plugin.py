@@ -43,8 +43,10 @@ class HomePlugin(PluginBase):
                     "furnace", "oil change", "air filter", "water heater", "gutter",
                 ],
                 handler=handle_home_nl,
-                description="Home maintenance natural language",
+                description="Log home maintenance tasks or ask when something was last done",
                 priority=10,
+                intent_id="home.maintenance",
+                examples=["I changed the furnace filter", "when did I last mow the lawn", "I replaced the air filter"],
             ),
         ]
 

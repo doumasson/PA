@@ -48,8 +48,10 @@ class MealsPlugin(PluginBase):
             NLHandler(
                 keywords=_NL_KEYWORDS,
                 handler=handle_meals_nl,
-                description="Meal planning and grocery list queries",
+                description="Meal planning, dinner ideas, grocery/shopping list management",
                 priority=10,
+                intent_id="meals.plan",
+                examples=["what's for dinner tonight", "add milk to the grocery list", "clear my shopping list"],
             ),
         ]
 

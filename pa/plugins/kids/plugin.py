@@ -39,8 +39,10 @@ class KidsPlugin(PluginBase):
             NLHandler(
                 keywords=_NL_KEYWORDS,
                 handler=handle_kids_nl,
-                description="Kid schedule queries and event management",
+                description="Questions about Maddox or Asher — schedules, events, school, sports, pickup",
                 priority=14,
+                intent_id="kids.schedule",
+                examples=["when is Maddox's next game", "does Asher have practice today", "what are the boys doing this weekend"],
             ),
         ]
 

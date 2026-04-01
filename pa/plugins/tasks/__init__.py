@@ -36,8 +36,10 @@ class TasksPlugin(PluginBase):
                     "remember to", "add task", "todo", "to do", "to-do",
                 ],
                 handler=handle_task_nl,
-                description="Add a task from natural language",
+                description="Add a task, reminder, or todo item",
                 priority=12,
+                intent_id="tasks.reminder",
+                examples=["remind me to call the dentist", "I need to pick up the kids at 5", "add to my todo list: fix the sink"],
             ),
         ]
 

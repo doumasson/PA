@@ -27,6 +27,8 @@ class PABot:
         self._app: Application | None = None
         self._command_registry: dict[str, Command] = {}
         self._nl_handlers: list = []
+        self._intent_registry: dict[str, Any] = {}  # intent_id -> NLHandler
+        self._intent_catalog: list[dict] = []  # built after all plugins register
         self._plugin_names: list[str] = []
 
     def register_command(self, cmd: Command) -> None:
@@ -36,6 +38,18 @@ class PABot:
 
     def register_nl_handler(self, handler) -> None:
         self._nl_handlers.append(handler)
+        if handler.intent_id:
+            self._intent_registry[handler.intent_id] = handler
+
+    def build_intent_catalog(self) -> None:
+        """Build the intent catalog from registered handlers. Call after all plugins register."""
+        self._intent_catalog = []
+        for intent_id, handler in self._intent_registry.items():
+            self._intent_catalog.append({
+                "intent_id": intent_id,
+                "description": handler.description,
+                "examples": handler.examples,
+            })
 
     def set_plugin_names(self, names: list[str]) -> None:
         self._plugin_names = names
@@ -351,25 +365,42 @@ class PABot:
             store=self._store, vault=self._vault, brain=self._brain,
             bot=self, scheduler=None, config=self._config,
         )
-        tl = text.lower()
-        matched = None
-        for h in sorted(self._nl_handlers, key=lambda x: -getattr(x, 'priority', 0)):
-            if any(kw in tl for kw in h.keywords):
-                matched = h
-                break
-        if matched:
+
+        # AI-powered intent classification
+        if self._intent_catalog:
             try:
-                result = await matched.handler(ctx, text, update)
-                if result:
-                    await self._send_long(update, result)
-            except Exception as e:
-                await update.message.reply_text(f"Error: {e}")
-        else:
-            try:
-                response = await self._brain.query(text)
-                await self._send_long(update, response)
-            except Exception as e:
-                await update.message.reply_text(f"Error: {e}")
+                intents = await self._brain.classify_intent(
+                    user_message=text,
+                    handler_catalog=self._intent_catalog,
+                    recent_context=self._brain._conversation[-6:],
+                )
+                if intents:
+                    results = []
+                    for intent in intents:
+                        handler = self._intent_registry.get(intent.get("intent_id", ""))
+                        if handler:
+                            try:
+                                result = await handler.handler(ctx, text, update)
+                                if result:
+                                    results.append(result)
+                                    # Learn from successful route (sample to avoid bloat)
+                                    if len(self._brain._intent_examples) < 200:
+                                        await self._brain.confirm_intent(text, intent["intent_id"])
+                            except Exception as e:
+                                results.append(f"Error: {e}")
+                    if results:
+                        combined = "\n\n".join(results)
+                        await self._send_long(update, combined)
+                        return
+            except Exception:
+                pass  # Fall through to general conversation on classifier failure
+
+        # Fallback: general conversation through brain
+        try:
+            response = await self._brain.query(text)
+            await self._send_long(update, response)
+        except Exception as e:
+            await update.message.reply_text(f"Error: {e}")
 
     @staticmethod
     async def _send_long(update: Update, text: str, chunk_size: int = 4000) -> None:

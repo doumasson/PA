@@ -54,3 +54,15 @@ CREATE TABLE IF NOT EXISTS query_templates (
     last_used TEXT,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+-- Intent routing examples (learned from use)
+CREATE TABLE IF NOT EXISTS core_intent_examples (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    message TEXT NOT NULL,
+    intent_id TEXT NOT NULL,
+    source TEXT NOT NULL DEFAULT 'confirmed',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_intent_examples_intent
+    ON core_intent_examples(intent_id);

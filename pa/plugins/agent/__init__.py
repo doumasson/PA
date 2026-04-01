@@ -29,8 +29,10 @@ class AgentPlugin(PluginBase):
                     "dungeonmind", "dungeon mind", "the game", "game status", "start building", "stop building", "fire up", "kick off",
                 ],
                 handler=handle_agent_query,
-                description="Control and query the DungeonMind build agent",
+                description="Control the DungeonMind build agent — start, stop, check status, view screenshots",
                 priority=5,
+                intent_id="agent.build",
+                examples=["start the build agent", "what's the game status", "fire up dungeonmind"],
             )
         ]
 

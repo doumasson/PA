@@ -8,7 +8,7 @@ from telegram.ext import ContextTypes
 
 
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE, brain, bot) -> None:
-    """Download voice memo, transcribe with Whisper, process as text."""
+    """Download voice memo, transcribe with Whisper, route through NL intent system."""
     await update.message.reply_text("🎙 Transcribing...")
 
     voice = update.message.voice
@@ -40,9 +40,7 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE, brain
 
     await update.message.reply_text(f"📝 You said: {text}")
 
-    # Process as normal message through brain
-    try:
-        response = await brain.query(text)
-        await update.message.reply_text(response)
-    except Exception as e:
-        await update.message.reply_text(f"Error: {e}")
+    # Inject transcribed text as a fake text message and route through the bot's
+    # full NL intent system (not just brain.query)
+    update.message.text = text
+    await bot._handle_message(update, context)

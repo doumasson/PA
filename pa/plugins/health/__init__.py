@@ -36,8 +36,10 @@ class HealthPlugin(PluginBase):
                     "worked out", "went to gym", "exercised", "feeling",
                 ],
                 handler=handle_health_nl,
-                description="Parse and log health data from natural language",
+                description="Log health data — exercise, sleep, weight, water intake, mood, gym activity",
                 priority=12,
+                intent_id="health.log",
+                examples=["I ran 3 miles today", "slept 6 hours last night", "I weigh 185"],
             ),
         ]
 

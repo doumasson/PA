@@ -36,6 +36,7 @@ class Brain:
         self._conversation: list[dict] = []
         self._conv_max = 20  # sliding window
         self._preferences: list[str] = []
+        self._intent_examples: list[dict] = []
 
     def set_store(self, store) -> None:
         self._store = store
@@ -44,7 +45,7 @@ class Brain:
         self._plugin_fragments = fragments
 
     async def load_from_db(self, store) -> None:
-        """Load conversation history and preferences from DB."""
+        """Load conversation history, preferences, and intent examples from DB."""
         self._store = store
         # Load recent conversation
         rows = await store.fetchall(
@@ -57,6 +58,11 @@ class Brain:
             "SELECT preference FROM core_preferences ORDER BY id DESC LIMIT 50"
         )
         self._preferences = [r["preference"] for r in rows]
+        # Load intent examples
+        rows = await store.fetchall(
+            "SELECT message, intent_id FROM core_intent_examples ORDER BY id DESC LIMIT 50"
+        )
+        self._intent_examples = [{"message": r["message"], "intent_id": r["intent_id"]} for r in rows]
 
     async def remember_message(self, role: str, content: str) -> None:
         """Add a message to conversation memory."""
@@ -209,6 +215,79 @@ class Brain:
                 )
         except Exception:
             pass
+
+    async def classify_intent(
+        self,
+        user_message: str,
+        handler_catalog: list[dict],
+        recent_context: list[dict] | None = None,
+    ) -> list[dict]:
+        """Classify user message into intents using Claude.
+
+        Returns list of {"intent_id": str, "confidence": float}.
+        Empty list = general conversation (no handler match).
+        """
+        # Build compact catalog
+        catalog_lines = []
+        for h in handler_catalog:
+            line = f"- {h['intent_id']}: {h['description']}"
+            if h.get("examples"):
+                line += f" (e.g. {', '.join(repr(e) for e in h['examples'][:3])})"
+            catalog_lines.append(line)
+        catalog_str = "\n".join(catalog_lines)
+
+        # Include learned examples (most recent 30)
+        example_lines = ""
+        if self._intent_examples:
+            ex = self._intent_examples[-30:]
+            example_lines = "\n\nLearned examples:\n" + "\n".join(
+                f'"{e["message"]}" -> {e["intent_id"]}' for e in ex
+            )
+
+        # Include recent conversation for context
+        context_str = ""
+        if recent_context:
+            turns = recent_context[-6:]  # last 3 exchanges
+            context_str = "\n\nRecent conversation:\n" + "\n".join(
+                f'{t["role"]}: {t["content"][:100]}' for t in turns
+            )
+
+        system = (
+            "You are an intent classifier. Given the user's message, classify it into "
+            "one or more intents from the catalog. Return raw JSON only.\n\n"
+            f"Intent catalog:\n{catalog_str}"
+            f"{example_lines}{context_str}\n\n"
+            "Rules:\n"
+            "- Return {\"intents\": [{\"intent_id\": \"x\", \"confidence\": 0.0-1.0}]}\n"
+            "- Multiple intents OK for compound requests (e.g. 'check email and show balance')\n"
+            "- If no intent matches (greeting, general chat, opinion), return {\"intents\": []}\n"
+            "- confidence < 0.4 means don't route there\n"
+            "- Context matters: follow-up questions belong with the prior topic\n"
+            "- Raw JSON only, no markdown"
+        )
+
+        try:
+            result = await self.query_json(
+                user_message, system_prompt=system,
+                tier=Tier.FAST, max_tokens=200,
+            )
+            intents = result.get("intents", [])
+            # Filter low confidence
+            return [i for i in intents if i.get("confidence", 0) >= 0.4]
+        except Exception:
+            return []
+
+    async def confirm_intent(self, message: str, intent_id: str, source: str = "confirmed") -> None:
+        """Save a confirmed intent routing for future learning."""
+        if not self._store:
+            return
+        await self._store.execute(
+            "INSERT INTO core_intent_examples (message, intent_id, source) VALUES (?, ?, ?)",
+            (message[:200], intent_id, source)
+        )
+        self._intent_examples.append({"message": message[:200], "intent_id": intent_id})
+        if len(self._intent_examples) > 100:
+            self._intent_examples = self._intent_examples[-50:]
 
     async def query_json(
         self,

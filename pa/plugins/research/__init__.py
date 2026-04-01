@@ -40,8 +40,10 @@ class ResearchPlugin(PluginBase):
                     "latest on", "update on", "find out about",
                 ],
                 handler=handle_research_nl,
-                description="Research a topic using Claude Sonnet",
+                description="Research a topic, get news or detailed information about something",
                 priority=8,
+                intent_id="research.topic",
+                examples=["what's happening with bitcoin", "tell me about the new tax laws", "research the best credit cards"],
             ),
         ]
 

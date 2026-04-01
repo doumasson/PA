@@ -63,6 +63,27 @@ async def main() -> None:
         if fragment:
             brain._plugin_fragments.append(fragment)
 
+    # Build intent catalog after all plugins have registered
+    bot.build_intent_catalog()
+
+    # Seed intent examples from keywords on first run
+    count = await store.fetchone("SELECT COUNT(*) as c FROM core_intent_examples")
+    if count and count['c'] == 0:
+        for nl in bot._nl_handlers:
+            if not nl.intent_id:
+                continue
+            for ex in nl.examples[:3]:
+                await store.execute(
+                    "INSERT INTO core_intent_examples (message, intent_id, source) VALUES (?, ?, 'seed')",
+                    (ex, nl.intent_id)
+                )
+            for kw in nl.keywords[:3]:
+                await store.execute(
+                    "INSERT INTO core_intent_examples (message, intent_id, source) VALUES (?, ?, 'seed')",
+                    (kw, nl.intent_id)
+                )
+        await brain.load_from_db(store)  # Reload with new examples
+
     ctx = AppContext(
         store=store, vault=vault, brain=brain,
         bot=bot, scheduler=scheduler, config=config,
