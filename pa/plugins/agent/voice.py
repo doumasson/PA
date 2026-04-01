@@ -30,7 +30,7 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE, brain
 
         # Transcribe with Whisper
         import whisper
-        model = whisper.load_model("tiny")
+        model = whisper.load_model("base")
         result = model.transcribe(str(wav_path))
         text = result["text"].strip()
 
