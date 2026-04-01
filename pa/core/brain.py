@@ -223,6 +223,66 @@ class Brain:
         except Exception:
             pass
 
+    async def plan_actions(
+        self,
+        user_message: str,
+        handler_catalog: list[dict],
+        recent_context: list[dict] | None = None,
+    ) -> dict:
+        """Plan a sequence of actions to fulfill the user's request.
+
+        Returns {"actions": [{"intent_id": str, "reason": str}], "synthesize": bool}
+        Empty actions = general conversation.
+        """
+        catalog_lines = []
+        for h in handler_catalog:
+            line = f"- {h['intent_id']}: {h['description']}"
+            if h.get("examples"):
+                line += f" (e.g. {', '.join(repr(e) for e in h['examples'][:2])})"
+            catalog_lines.append(line)
+        catalog_str = "\n".join(catalog_lines)
+
+        example_lines = ""
+        if self._intent_examples:
+            ex = self._intent_examples[-20:]
+            example_lines = "\n\nLearned examples:\n" + "\n".join(
+                f'"{e["message"]}" -> {e["intent_id"]}' for e in ex
+            )
+
+        context_str = ""
+        if recent_context:
+            turns = recent_context[-6:]
+            context_str = "\n\nRecent conversation:\n" + "\n".join(
+                f'{t["role"]}: {t["content"][:100]}' for t in turns
+            )
+
+        system = (
+            "You are an action planner for a personal assistant. Given the user's message, "
+            "plan what actions to take from the available catalog. Think step by step.\n\n"
+            f"Available actions:\n{catalog_str}"
+            f"{example_lines}{context_str}\n\n"
+            "Rules:\n"
+            "- Return JSON: {\"actions\": [{\"intent_id\": \"x\", \"reason\": \"why\"}], \"synthesize\": false}\n"
+            "- Order matters: first action's result feeds into the next\n"
+            "- For multi-step tasks, chain actions (e.g. search email → save debt)\n"
+            "- If the message is a greeting, opinion, or general chat: {\"actions\": []}\n"
+            "- If a follow-up refers to prior conversation, use context to pick the right action\n"
+            "- 'synthesize': true if multiple action results should be combined into one response\n"
+            "- When in doubt, pick an action — it's better to try and fail than to chat aimlessly\n"
+            "- Raw JSON only, no markdown"
+        )
+
+        try:
+            result = await self.query_json(
+                user_message, system_prompt=system,
+                tier=Tier.FAST, max_tokens=300,
+            )
+            actions = result.get("actions", [])
+            synthesize = result.get("synthesize", False)
+            return {"actions": actions, "synthesize": synthesize}
+        except Exception:
+            return {"actions": [], "synthesize": False}
+
     async def classify_intent(
         self,
         user_message: str,

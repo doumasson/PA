@@ -368,57 +368,84 @@ class PABot:
         await self._route_message(text, update, context)
 
     async def _route_message(self, text: str, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Route a text message through AI intent classification and handlers."""
+        """Agent loop: plan actions, execute them, chain results, respond."""
         ctx = AppContext(
             store=self._store, vault=self._vault, brain=self._brain,
             bot=self, scheduler=self._scheduler, config=self._config,
         )
 
-        # AI-powered intent classification
-        if self._intent_catalog:
-            try:
-                intents = await self._brain.classify_intent(
-                    user_message=text,
-                    handler_catalog=self._intent_catalog,
-                    recent_context=self._brain._conversation[-6:],
-                )
-                if intents:
-                    results = []
-                    prior_result = None
-                    for intent in intents:
-                        handler = self._intent_registry.get(intent.get("intent_id", ""))
-                        if handler:
-                            try:
-                                # Pass prior handler result as context for chaining
-                                if prior_result:
-                                    chained_text = f"{text}\n\n[Prior result: {prior_result}]"
-                                else:
-                                    chained_text = text
-                                result = await handler.handler(ctx, chained_text, update)
-                                if result:
-                                    results.append(result)
-                                    prior_result = result
-                                    # Learn from successful route
-                                    if len(self._brain._intent_examples) < 200:
-                                        await self._brain.confirm_intent(text, intent["intent_id"])
-                            except Exception as e:
-                                results.append(f"Error: {e}")
-                    if results:
-                        combined = "\n\n".join(results)
-                        await self._send_long(update, combined)
-                        # Remember the exchange in conversation memory
-                        await self._brain.remember_message("user", text)
-                        await self._brain.remember_message("assistant", combined)
-                        return
-            except Exception:
-                pass  # Fall through to general conversation on classifier failure
-
-        # Fallback: general conversation through brain
-        try:
+        if not self._intent_catalog:
+            # No plugins loaded — just chat
             response = await self._brain.query(text)
             await self._send_long(update, response)
-        except Exception as e:
-            await update.message.reply_text(f"Error: {e}")
+            return
+
+        # Step 1: Ask Claude to plan what actions to take
+        try:
+            plan = await self._brain.plan_actions(
+                user_message=text,
+                handler_catalog=self._intent_catalog,
+                recent_context=self._brain._conversation[-6:],
+            )
+        except Exception:
+            # Classifier down — fall through to conversation
+            response = await self._brain.query(text)
+            await self._send_long(update, response)
+            return
+
+        actions = plan.get("actions", [])
+
+        # No actions = general conversation (greetings, opinions, chat)
+        if not actions:
+            response = await self._brain.query(text)
+            await self._send_long(update, response)
+            return
+
+        # Step 2: Execute each action, chaining results forward
+        all_results = []
+        accumulated_context = ""
+        for action in actions:
+            intent_id = action.get("intent_id", "")
+            handler = self._intent_registry.get(intent_id)
+            if not handler:
+                continue
+            try:
+                # Give handler the original text + any prior results
+                handler_input = text
+                if accumulated_context:
+                    handler_input = f"{text}\n\n[Context from prior steps: {accumulated_context}]"
+                result = await handler.handler(ctx, handler_input, update)
+                if result:
+                    all_results.append(result)
+                    accumulated_context += f"\n{intent_id}: {result}"
+                    # Learn from successful route
+                    if len(self._brain._intent_examples) < 200:
+                        await self._brain.confirm_intent(text, intent_id)
+            except Exception as e:
+                all_results.append(f"Error in {intent_id}: {e}")
+
+        # Step 3: If plan includes a final synthesis, let Claude summarize
+        if all_results:
+            if len(all_results) == 1:
+                final = all_results[0]
+            elif plan.get("synthesize"):
+                # Multiple results — let Claude combine them naturally
+                combined_data = "\n\n---\n\n".join(all_results)
+                final = await self._brain.query(
+                    f"User asked: '{text}'\n\nResults from actions:\n{combined_data}\n\n"
+                    "Combine these into a single, natural response. Be concise.",
+                    use_conversation=False,
+                )
+            else:
+                final = "\n\n".join(all_results)
+
+            await self._send_long(update, final)
+            await self._brain.remember_message("user", text)
+            await self._brain.remember_message("assistant", final)
+        else:
+            # Actions planned but none produced results — fall through
+            response = await self._brain.query(text)
+            await self._send_long(update, response)
 
     @staticmethod
     async def _send_long(update: Update, text: str, chunk_size: int = 4000) -> None:
