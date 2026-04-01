@@ -287,8 +287,5 @@ async def _cleanup_old_notifications(store) -> None:
 
 def get_google_jobs() -> list[Job]:
     return [
-        Job(name="gmail_check_6am",  handler=check_gmail, trigger="cron", kwargs={"hour": 6,  "minute": 0}),
-        Job(name="gmail_check_10am", handler=check_gmail, trigger="cron", kwargs={"hour": 10, "minute": 0}),
-        Job(name="gmail_check_2pm",  handler=check_gmail, trigger="cron", kwargs={"hour": 14, "minute": 0}),
-        Job(name="gmail_check_6pm",  handler=check_gmail, trigger="cron", kwargs={"hour": 18, "minute": 0}),
+        Job(name="gmail_check_morning", handler=check_gmail, trigger="cron", kwargs={"hour": 7, "minute": 0}),
     ]
