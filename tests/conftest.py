@@ -16,7 +16,7 @@ def sample_config(tmp_dir: Path) -> Path:
     config_path.write_text(json.dumps({
         "telegram_user_id": 123456789,
         "telegram_bot_token_env": "PA_TELEGRAM_TOKEN",
-        "claude_api_key_env": "PA_CLAUDE_API_KEY",
+        "proxy_base_url": "http://localhost:8317/v1",
         "monthly_income": 5000.0,
         "financial_goals": ["debt-free in 2 years"],
         "preferences": [],

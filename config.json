@@ -1,7 +1,7 @@
 {
   "telegram_user_id": 5678604724,
   "telegram_bot_token_env": "PA_TELEGRAM_TOKEN",
-  "claude_api_key_env": "PA_CLAUDE_API_KEY",
+  "proxy_base_url": "http://localhost:8317/v1",
   "monthly_income": 7640,
   "financial_goals": ["pay off all debt", "fix credit score", "build emergency fund"],
   "preferences": [],

@@ -156,9 +156,7 @@ class PABot:
             return
         status = "unlocked" if self._vault.is_unlocked else "locked"
         text = f"Vault: {status}\n"
-        if self._brain:
-            ct = self._brain.cost_tracker
-            text += f"API budget: ${ct.remaining:.2f} remaining this month\n"
+        text += "Mode: Subscription (CLIProxyAPI)\n"
         text += f"Plugins: {', '.join(self._plugin_names) or 'none'}"
         await update.message.reply_text(text)
 

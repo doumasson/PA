@@ -1,0 +1,15 @@
+[Unit]
+Description=CLIProxyAPI - Claude Code proxy for Albus
+After=network.target
+
+[Service]
+Type=simple
+User=admin
+ExecStart=/usr/local/bin/cli-proxy-api -config /home/admin/.cli-proxy-api/config.yaml
+Restart=on-failure
+RestartSec=5
+Environment=HOME=/home/admin
+Environment=PATH=/home/admin/.npm-global/bin:/usr/local/bin:/usr/bin:/bin
+
+[Install]
+WantedBy=multi-user.target

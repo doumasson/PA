@@ -55,7 +55,7 @@ async def _create_pilot(data_dir: str) -> tuple:
 
     page = await context.new_page()
 
-    brain_config = {"claude_api_key_env": "PA_CLAUDE_API_KEY", "cost_cap_monthly_usd": 20.0}
+    brain_config = {"proxy_base_url": "http://localhost:8317/v1"}
     brain = Brain(brain_config)
 
     pilot = AIPilot(page, brain)

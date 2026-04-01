@@ -12,7 +12,7 @@ A self-teaching, self-healing personal assistant that runs on a Raspberry Pi and
 - Python 3.11+, async (asyncio)
 - python-telegram-bot (Telegram interface)
 - APScheduler (scheduled jobs)
-- Claude API — Haiku/Sonnet/Opus tiered (low-cost by default)
+- CLIProxyAPI → Claude (via Max subscription, OpenAI-compatible endpoint on localhost:8317)
 - SQLite + aiosqlite (data storage)
 - cryptography (Argon2id + AES-256-GCM vault)
 - Teller API (real-time bank data)
@@ -26,9 +26,8 @@ pa/
     identity.py            # Name/persona
     config.py              # JSON config loader
     store.py               # SQLite wrapper
-    brain.py               # Claude API (tiered, cost-tracked, conversation memory)
+    brain.py               # Claude via CLIProxyAPI (OpenAI SDK, conversation memory)
     tier.py                # Dynamic tier classifier
-    cost_tracker.py        # Monthly API budget (persisted to DB)
     scheduler.py           # APScheduler (plugin-registered jobs)
     bot.py                 # Telegram bot (commands + NL handlers)
     exceptions.py          # Exception hierarchy
@@ -51,7 +50,7 @@ pa/
 ## Architecture Principles
 - **Self-teaching**: conversation memory, preference learning, interaction tracking
 - **Self-healing**: errors logged to DB, repeated failures auto-reported, patterns tracked
-- **Low-cost**: Haiku by default for NL queries, Sonnet only when classifier says so
+- **Zero API cost**: Uses Claude Max subscription via CLIProxyAPI (no per-query charges)
 - **Modular**: new feature = new plugin directory, auto-discovered
 - **Secure**: vault-encrypted creds, never log sensitive data, read-only financial access
 

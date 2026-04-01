@@ -1,41 +1,34 @@
 import asyncio
 import json
 import os
-import subprocess
 import time
 from collections import deque
 from typing import Any
 
-import anthropic
+from openai import AsyncOpenAI
 
-from pa.core.cost_tracker import CostTracker
 from pa.core.exceptions import BrainAPIError
 from pa.core.identity import NAME, PERSONA
 from pa.core.tier import Tier
 
+# CLIProxyAPI uses OpenAI format — all tiers route through Sonnet via subscription
+# Haiku has tool-use reliability issues through CLIProxyAPI, so everything uses Sonnet
 _MODEL_MAP = {
-    Tier.FAST: "claude-haiku-4-5-20251001",
-    Tier.STANDARD: "claude-sonnet-4-6",
-    Tier.DEEP: "claude-opus-4-6",
-}
-
-_COST_PER_1K_TOKENS = {
-    Tier.FAST: 0.001,
-    Tier.STANDARD: 0.01,
-    Tier.DEEP: 0.10,
+    Tier.FAST: "claude-sonnet-4-5-20250929",
+    Tier.STANDARD: "claude-sonnet-4-5-20250929",
+    Tier.DEEP: "claude-sonnet-4-5-20250929",
 }
 
 _MAX_RETRIES = 3
-_MAX_QUERIES_PER_HOUR = 30
+_MAX_QUERIES_PER_HOUR = 60  # Bumped — no per-query cost on subscription
 
 
 class Brain:
     def __init__(self, config: Any):
-        api_key_env = config.get("claude_api_key_env", "PA_CLAUDE_API_KEY")
-        api_key = os.environ.get(api_key_env, "")
-        self._client = anthropic.AsyncAnthropic(api_key=api_key)
-        self._cost_tracker = CostTracker(
-            monthly_cap=config.get("cost_cap_monthly_usd", 20.0)
+        proxy_url = config.get("proxy_base_url", "http://localhost:8317/v1")
+        self._client = AsyncOpenAI(
+            base_url=proxy_url,
+            api_key="not-needed",  # CLIProxyAPI with no auth providers
         )
         self._query_timestamps: deque[float] = deque()
         self._plugin_fragments: list[str] = []
@@ -53,7 +46,6 @@ class Brain:
     async def load_from_db(self, store) -> None:
         """Load conversation history and preferences from DB."""
         self._store = store
-        await self._cost_tracker.load_from_db(store)
         # Load recent conversation
         rows = await store.fetchall(
             "SELECT role, content FROM core_conversations ORDER BY id DESC LIMIT ?",
@@ -136,23 +128,20 @@ class Brain:
 
         prompt = system_prompt or self.build_system_prompt()
 
-        estimated_cost = _COST_PER_1K_TOKENS[tier] * 2
-        self._cost_tracker.check_budget(estimated_cost)
-
         # Build messages with conversation history
+        messages = []
+        # OpenAI format: system message first
+        messages.append({"role": "system", "content": prompt})
         if use_conversation and self._conversation:
-            messages = list(self._conversation[-10:])
-            messages.append({"role": "user", "content": user_message})
-        else:
-            messages = [{"role": "user", "content": user_message}]
+            messages.extend(self._conversation[-10:])
+        messages.append({"role": "user", "content": user_message})
 
         last_error = None
         for attempt in range(_MAX_RETRIES):
             try:
-                response = await self._client.messages.create(
+                response = await self._client.chat.completions.create(
                     model=model,
                     max_tokens=1024,
-                    system=prompt,
                     messages=messages,
                 )
                 break
@@ -161,15 +150,11 @@ class Brain:
                 if attempt < _MAX_RETRIES - 1:
                     await asyncio.sleep(2 ** attempt)
         else:
-            raise BrainAPIError(f"Claude API error after {_MAX_RETRIES} retries: {last_error}") from last_error
+            raise BrainAPIError(f"Proxy API error after {_MAX_RETRIES} retries: {last_error}") from last_error
 
         self._query_timestamps.append(time.monotonic())
 
-        total_tokens = response.usage.input_tokens + response.usage.output_tokens
-        actual_cost = (total_tokens / 1000) * _COST_PER_1K_TOKENS[tier]
-        self._cost_tracker.record(actual_cost)
-
-        result = response.content[0].text
+        result = response.choices[0].message.content
 
         # Acknowledge the learned preference in the response
         if learned:
@@ -225,49 +210,6 @@ class Brain:
         except Exception:
             pass
 
-    async def query_subscription(self, prompt: str, system_prompt: str = "") -> str:
-        """Route a query through Claude Code CLI using the user's subscription.
-        Use this for heavy analysis (financial advisor, complex categorization)
-        where quality matters more than speed. FREE — no API cost."""
-        full_prompt = f"{system_prompt}\n\n{prompt}" if system_prompt else prompt
-        try:
-            result = await asyncio.to_thread(
-                self._run_claude_cli, full_prompt
-            )
-            return result
-        except Exception as e:
-            # Fall back to API if CLI not available
-            return await self.query(
-                prompt, system_prompt=system_prompt or None,
-                tier=Tier.STANDARD, use_conversation=False,
-            )
-
-    @staticmethod
-    def _run_claude_cli(prompt: str) -> str:
-        """Synchronous Claude Code CLI call."""
-        extra_paths = [
-            os.path.expanduser("~/.local/bin"),
-            os.path.expanduser("~/.npm-global/bin"),
-        ]
-        env = os.environ.copy()
-        for p in extra_paths:
-            if p not in env.get("PATH", ""):
-                env["PATH"] = p + os.pathsep + env.get("PATH", "")
-
-        try:
-            result = subprocess.run(
-                ["claude", "-p", prompt, "--output-format", "json"],
-                capture_output=True, text=True, timeout=300, env=env,
-            )
-            if result.returncode == 0 and result.stdout.strip():
-                data = json.loads(result.stdout)
-                return data.get("result", result.stdout)
-            return result.stdout or result.stderr
-        except FileNotFoundError:
-            raise BrainAPIError("Claude CLI not found — install Claude Code")
-        except subprocess.TimeoutExpired:
-            raise BrainAPIError("Claude CLI timed out (5 min)")
-
     async def query_json(
         self,
         user_message: str,
@@ -276,35 +218,33 @@ class Brain:
         image: bytes | None = None,
         max_tokens: int = 1024,
     ) -> dict:
-        """Send a query expecting a JSON response. Skips rate limit (infrastructure use)."""
+        """Send a query expecting a JSON response."""
         model = self.select_model(tier)
-        estimated_cost = _COST_PER_1K_TOKENS[tier] * 2
-        self._cost_tracker.check_budget(estimated_cost)
+
+        messages = [{"role": "system", "content": system_prompt}]
 
         if image is not None:
             import base64
             content = [
                 {
-                    "type": "image",
-                    "source": {
-                        "type": "base64",
-                        "media_type": "image/png",
-                        "data": base64.b64encode(image).decode(),
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:image/png;base64,{base64.b64encode(image).decode()}"
                     },
                 },
                 {"type": "text", "text": user_message},
             ]
+            messages.append({"role": "user", "content": content})
         else:
-            content = user_message
+            messages.append({"role": "user", "content": user_message})
 
         last_error = None
         for attempt in range(_MAX_RETRIES):
             try:
-                response = await self._client.messages.create(
+                response = await self._client.chat.completions.create(
                     model=model,
                     max_tokens=max_tokens,
-                    system=system_prompt,
-                    messages=[{"role": "user", "content": content}],
+                    messages=messages,
                 )
                 break
             except Exception as e:
@@ -312,13 +252,9 @@ class Brain:
                 if attempt < _MAX_RETRIES - 1:
                     await asyncio.sleep(2 ** attempt)
         else:
-            raise BrainAPIError(f"Claude API error after {_MAX_RETRIES} retries: {last_error}") from last_error
+            raise BrainAPIError(f"Proxy API error after {_MAX_RETRIES} retries: {last_error}") from last_error
 
-        total_tokens = response.usage.input_tokens + response.usage.output_tokens
-        actual_cost = (total_tokens / 1000) * _COST_PER_1K_TOKENS[tier]
-        self._cost_tracker.record(actual_cost)
-
-        text = response.content[0].text
+        text = response.choices[0].message.content
         return self._extract_json(text)
 
     @staticmethod
@@ -365,5 +301,22 @@ class Brain:
         return json_mod.loads(text[start:end + 1])
 
     @property
-    def cost_tracker(self) -> CostTracker:
-        return self._cost_tracker
+    def cost_tracker(self):
+        """Stub for backwards compatibility — no cost tracking on subscription."""
+        return _NullCostTracker()
+
+
+class _NullCostTracker:
+    """No-op cost tracker for subscription mode."""
+    total_this_month = 0.0
+    remaining = float('inf')
+    should_alert = False
+
+    def record(self, cost: float) -> None:
+        pass
+
+    def check_budget(self, estimated_cost: float) -> None:
+        pass
+
+    async def load_from_db(self, store) -> None:
+        pass

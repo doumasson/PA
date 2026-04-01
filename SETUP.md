@@ -23,21 +23,14 @@ Now get your Telegram user ID (so George only responds to YOU):
 
 ---
 
-## Step 2: Get a Claude API Key
+## Step 2: Set Up CLIProxyAPI (Claude Access)
 
-This is how George thinks — he uses Claude to analyze your finances.
+Albus uses Claude through CLIProxyAPI, which proxies requests through your Claude Max subscription — no API key needed.
 
-1. Go to https://console.anthropic.com
-2. Create an account (or log in)
-3. Go to **API Keys** in the left sidebar
-4. Click **Create Key**
-5. Name it `george` and click **Create**
-6. **Copy the key** — it starts with `sk-ant-` — you only see it once
-
-You need to add credit to your account:
-1. Go to **Billing** in the left sidebar
-2. Add a payment method
-3. Add $5-10 to start (George's default budget is $20/month, but most queries cost fractions of a cent)
+1. Install CLIProxyAPI on your Pi (see `deploy/` for binary and config)
+2. Authenticate once: `cli-proxy-api -claude-login -no-browser -config /etc/cliproxy/config.yaml`
+3. Open the OAuth URL in your browser, authorize, copy the callback URL from the address bar, paste it back
+4. CLIProxyAPI runs as a systemd service on `localhost:8317`
 
 ---
 
@@ -102,10 +95,9 @@ Still on the Pi:
 nano ~/pa/.env
 ```
 
-Replace the placeholder values:
+Replace the placeholder value:
 ```
 PA_TELEGRAM_TOKEN=7123456789:AAF1234abcd5678efgh
-PA_CLAUDE_API_KEY=sk-ant-api03-xxxxx
 ```
 
 Save: press `Ctrl+O`, then `Enter`, then `Ctrl+X`
