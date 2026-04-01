@@ -216,7 +216,11 @@ async def handle_email_search(ctx: AppContext, text: str, update: Update) -> str
     # Use Claude to parse what the user is looking for
     PARSE = """Parse this email search request. Return ONLY JSON:
 {"sender": "company name or null", "subject": "subject keywords or null", "action": "search"|"extract_balance"|"extract_and_save", "days_back": 7}
-If the user wants to find a balance/statement and save it as a debt, use "extract_and_save".
+Rules for action:
+- "extract_and_save": user wants to find a balance/statement AND save/track it as a debt (default for credit cards, bills, loans)
+- "extract_balance": user asks "how much do I owe" or wants to know a balance from email
+- "search": user just wants to find/read emails, no financial extraction
+If in doubt between search and extract, choose "extract_balance" — it's better to extract and show than to just summarize.
 Raw JSON only."""
 
     import json
@@ -265,8 +269,8 @@ Raw JSON only."""
 
     all_emails = "\n---\n".join(email_summaries)
 
-    # If user wants to extract and save a balance
-    if data.get("action") in ("extract_balance", "extract_and_save"):
+    # Extract financial data from emails (default behavior for any financial query)
+    if data.get("action") in ("extract_balance", "extract_and_save", "search"):
         EXTRACT = """From the emails below, extract financial data. Return ONLY JSON:
 {"institution": "company name", "account_name": "card/account name", "account_type": "credit_card"|"store_card"|"charge_card"|"loan"|"mortgage"|"medical"|"utility",
  "balance": 0.00, "minimum_payment": 0.00, "due_date": "YYYY-MM-DD or null"}
@@ -288,31 +292,36 @@ Raw JSON only."""
             except Exception:
                 return f"Found {len(emails)} emails but couldn't extract balance data. Here's what I found:\n\n{emails[0]['snippet']}"
 
-        # Save extracted debts
-        from pa.plugins.finance.advisor import update_debt
+        # Save extracted debts if action warrants it
+        should_save = data.get("action") in ("extract_and_save", "extract_balance")
+        if should_save:
+            from pa.plugins.finance.advisor import update_debt
+
         results = []
         for item in extracted:
             if item.get("balance") is not None:
-                await update_debt(
-                    ctx,
-                    institution=item.get("institution", "Unknown"),
-                    account_name=item.get("account_name", "Account"),
-                    balance=float(item["balance"]),
-                    minimum_payment=float(item["minimum_payment"]) if item.get("minimum_payment") else None,
-                    due_date=item.get("due_date"),
-                    account_type=item.get("account_type", "credit_card"),
-                )
-                results.append(
+                if should_save:
+                    await update_debt(
+                        ctx,
+                        institution=item.get("institution", "Unknown"),
+                        account_name=item.get("account_name", "Account"),
+                        balance=float(item["balance"]),
+                        minimum_payment=float(item["minimum_payment"]) if item.get("minimum_payment") else None,
+                        due_date=item.get("due_date"),
+                        account_type=item.get("account_type", "credit_card"),
+                    )
+                line = (
                     f"**{item.get('institution')}** {item.get('account_name')}: "
                     f"${float(item['balance']):,.2f}"
                     + (f" (min payment: ${float(item['minimum_payment']):,.2f})" if item.get('minimum_payment') else "")
                     + (f" due {item['due_date']}" if item.get('due_date') else "")
                 )
+                results.append(line)
 
         if results:
-            return "Extracted and saved:\n" + "\n".join(results)
-        return "Found emails but couldn't extract balance data."
+            prefix = "Extracted and saved to debts:\n" if should_save else "Found in emails:\n"
+            return prefix + "\n".join(results)
 
-    # Default: just summarize the emails
-    SUMMARIZE = f"User asked: '{text}'\n\nFound {len(emails)} emails:\n{all_emails}\n\nSummarize what's relevant. Be concise."
-    return await ctx.brain.query(SUMMARIZE, tier=Tier.FAST, use_conversation=False)
+        # Fallback: summarize if no financial data found
+        SUMMARIZE = f"User asked: '{text}'\n\nFound {len(emails)} emails:\n{all_emails}\n\nSummarize what's relevant. Be concise."
+        return await ctx.brain.query(SUMMARIZE, tier=Tier.FAST, use_conversation=False)
