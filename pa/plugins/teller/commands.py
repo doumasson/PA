@@ -36,14 +36,14 @@ async def handle_teller_nl(ctx: AppContext, text: str, update: Update) -> str:
         await update.message.reply_text("Reviewing your week...")
         return await get_weekly_spending_summary(ctx)
 
-    # Merchant search - "how much at X" or "spent at X"
+    # Merchant search - "how much at X", "spent at X", "spending at X"
     import re
     from pa.plugins.finance.merchants import get_category
     merchant_match = re.search(
-        r"(?:how much|spent?|spend|at|on)\s+(?:at\s+|on\s+)?([a-zA-Z0-9 &\']+?)(?:\s+(?:in|over|last|this|the).*)?$",
+        r"(?:how much\s+(?:have\s+i\s+)?(?:spent?|spend)\s+(?:at|on)\s+|spent?\s+at\s+|spend(?:ing)?\s+at\s+|how (?:much|often)\s+(?:at|do i (?:spend|go to))\s+)([a-zA-Z0-9 &\']+?)(?:\s+(?:in|over|last|this|the|today|lately).*)?$",
         tl
     )
-    if merchant_match and any(w in tl for w in ["how much", "spent at", "spend at", "at ", "how often"]):
+    if merchant_match:
         merchant = merchant_match.group(1).strip()
         if len(merchant) > 2:
             category = await get_category(ctx.store, merchant)

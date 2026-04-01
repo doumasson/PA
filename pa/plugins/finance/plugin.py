@@ -70,7 +70,7 @@ class FinancePlugin(PluginBase):
             NLHandler(keywords=["is a ", "is an ", "is not ", "categorize ", "that's actually", "isnt a"], handler=handle_finance_nl, priority=18),
             NLHandler(keywords=["can i afford", "should i buy", "do i have enough", "enough for", "enough to buy"], handler=handle_affordability_nl, priority=15),
             NLHandler(keywords=["i paid", "i just paid", "paid off", "made a payment", "balance is now", "new balance"], handler=handle_finance_nl, priority=15),
-            NLHandler(keywords=["balance", "how much", "account", "checking", "savings", "credit card"], handler=handle_finance_nl, priority=10),
+            NLHandler(keywords=["balance", "how much money", "how much do i have", "account", "checking", "savings", "credit card"], handler=handle_finance_nl, priority=10),
             NLHandler(keywords=["debt", "owe", "loan", "payoff"], handler=handle_finance_nl, priority=10),
             NLHandler(keywords=["spending", "spent", "expenses", "transactions", "charges", "subscription"], handler=handle_finance_nl, priority=10),
             NLHandler(keywords=["due", "payment", "bill", "upcoming"], handler=handle_finance_nl, priority=10),

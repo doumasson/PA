@@ -27,7 +27,7 @@ class TellerPlugin(PluginBase):
                 priority=15,
             ),
             NLHandler(
-                keywords=["yesterday", "morning update", "how much did i spend", "last week", "weekly", "7 days", "how much", "spent at", "spend at"],
+                keywords=["yesterday", "morning update", "how much did i spend", "last week", "weekly", "7 days", "spent at", "spend at", "spending at", "how much at", "how often at"],
                 handler=handle_teller_nl,
                 priority=15,
             ),

@@ -182,7 +182,7 @@ async def handle_gmail_nl(ctx: AppContext, text: str, update: Update) -> str:
 
     tl = text.lower()
 
-    if any(w in tl for w in ["check", "any emails", "what's in", "inbox", "new email", "unread"]):
+    if any(w in tl for w in ["check", "any emails", "any email", "emails", "what's in", "inbox", "new email", "unread", "critical", "important", "urgent"]):
         await update.message.reply_text("Checking Gmail now...")
         from pa.plugins.google.jobs import check_gmail
         from pa.plugins.google.client import gmail_service
