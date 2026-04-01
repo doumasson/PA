@@ -361,6 +361,10 @@ class PABot:
             return
 
         text = update.message.text
+        await self._route_message(text, update, context)
+
+    async def _route_message(self, text: str, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Route a text message through AI intent classification and handlers."""
         ctx = AppContext(
             store=self._store, vault=self._vault, brain=self._brain,
             bot=self, scheduler=None, config=self._config,

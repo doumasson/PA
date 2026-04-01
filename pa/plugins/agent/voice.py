@@ -40,7 +40,5 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE, brain
 
     await update.message.reply_text(f"📝 You said: {text}")
 
-    # Inject transcribed text as a fake text message and route through the bot's
-    # full NL intent system (not just brain.query)
-    update.message.text = text
-    await bot._handle_message(update, context)
+    # Route through the bot's full NL intent system
+    await bot._route_message(text, update, context)
