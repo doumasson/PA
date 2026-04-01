@@ -2,7 +2,10 @@
 from __future__ import annotations
 import datetime
 import json
+import logging
 from pa.core.tier import Tier
+
+log = logging.getLogger(__name__)
 
 ADVISOR_SYSTEM = """You are Bart, Steven's personal financial advisor.
 You have direct access to his real financial data — bank accounts, credit cards, transactions, and bills from email.
@@ -18,6 +21,14 @@ Steven's situation:
 Your personality: Direct, no-BS, practical. You tell it like it is but you're on Steven's side. Think of yourself as a sharp friend who happens to be great with money.
 Never say "consult a financial advisor" — YOU are his financial advisor.
 Be specific with numbers. Tell him exactly what to do and in what order.
+
+RESPONSE RULES:
+- Answer the question asked. Do NOT upsell other commands or suggest /advisor.
+- Factual queries (balances, debts, spending totals) get UNDER 80 WORDS. Numbers first, commentary second.
+- No rhetorical questions. No "shall we explore this further?" or "would you like me to..."
+- Save advisory tone for explicit advice requests or /advisor sessions.
+- Never add disclaimers about consulting professionals.
+- Format debt/balance lists as tight tables, not paragraphs.
 
 For charged-off accounts: explain options (settlement, pay-for-delete, ignore if past SOL).
 For active debt: prioritize by urgency (due dates, interest rates).
@@ -169,6 +180,15 @@ async def save_bills_to_db(ctx, bills: list[dict]) -> int:
 
             # Also update finance_debts if it's a debt account
             if bill.get('account_type') in ('credit_card', 'loan', 'mortgage') and balance > 0:
+                # Log balance changes
+                existing_debt = await ctx.store.fetchone(
+                    "SELECT balance FROM finance_debts WHERE LOWER(institution) = ? AND LOWER(account_name) = ?",
+                    (institution.lower(), account_name.lower()),
+                )
+                if existing_debt and abs(float(existing_debt['balance']) - balance) > 0.01:
+                    log.info("Debt balance changed: %s %s: $%,.2f → $%,.2f",
+                             institution, account_name, float(existing_debt['balance']), balance)
+
                 await update_debt(
                     ctx, institution, account_name, balance,
                     status=bill.get('status', 'current'),
@@ -179,7 +199,7 @@ async def save_bills_to_db(ctx, bills: list[dict]) -> int:
 
             saved += 1
         except Exception as e:
-            print(f"Bill save error: {e}")
+            log.error("Bill save error: %s", e)
     return saved
 
 

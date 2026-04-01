@@ -18,6 +18,12 @@ CREATE TABLE IF NOT EXISTS google_state (
     value TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS google_notified_emails (
+    message_id TEXT PRIMARY KEY,
+    subject_snippet TEXT,
+    notified_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS google_email_blocks (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     block_type TEXT NOT NULL CHECK(block_type IN ('sender', 'subject', 'keyword')),
@@ -42,7 +48,12 @@ CREATE TABLE IF NOT EXISTS google_email_blocks (
             NLHandler(
                 keywords=["now plays", "now playing", "switched to", "is playing",
                           "started playing", "signed up for", "doing football",
-                          "doing soccer", "doing basketball", "doing baseball"],
+                          "doing soccer", "doing basketball", "doing baseball",
+                          "plays basketball", "plays soccer", "plays football",
+                          "is the soccer", "is the basketball", "is the football",
+                          "soccer player", "basketball player", "football player",
+                          "doesn't play", "not maddox", "not asher",
+                          "is soccer", "is basketball", "is football"],
                 handler=handle_kid_sport,
                 description="Update what sport a kid plays",
                 priority=19,

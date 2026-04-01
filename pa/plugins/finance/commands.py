@@ -490,3 +490,67 @@ async def handle_bill_paid(ctx: AppContext, update: Any, context: Any) -> str:
     if rows_changed == 0:
         return f"No bill found with name '{name}'. Use /bills to see tracked bills."
     return f"Marked {name} as paid."
+
+
+async def handle_recat(ctx: AppContext, update: Any, context: Any) -> str:
+    """Re-categorize all uncategorized transactions using merchant patterns + Claude fallback."""
+    from pa.plugins.finance.merchants import get_category, learn_category
+    from pa.core.tier import Tier
+    import re as _re
+
+    # Get uncategorized transactions
+    rows = await ctx.store.fetchall(
+        "SELECT id, description FROM finance_transactions "
+        "WHERE category IS NULL OR category = '' OR category = 'general'",
+    )
+    if not rows:
+        return "All transactions are already categorized."
+
+    categorized = 0
+    still_unknown = []
+
+    # Pass 1: Try pattern matching (learned + builtin)
+    for row in rows:
+        cat = await get_category(ctx.store, row['description'])
+        if cat:
+            await ctx.store.execute(
+                "UPDATE finance_transactions SET category = ? WHERE id = ?",
+                (cat, row['id']),
+            )
+            categorized += 1
+        else:
+            still_unknown.append(row)
+
+    # Pass 2: Batch Claude fallback for remaining unknowns (up to 30)
+    if still_unknown:
+        batch = still_unknown[:30]
+        desc_list = "\n".join(f"- {r['description']}" for r in batch)
+        SYSTEM = (
+            "Categorize these merchant/transaction descriptions. Return ONLY a JSON array of objects:\n"
+            '[{"description": "...", "category": "Groceries|Gas|Food/Dining|Food/Delivery|Food/Coffee|'
+            'Shopping|Liquor|Software|Subscription|Bills|Transfer|Recreation|Medical|Auto|Income|Kids|Cash Advance|Other"}]\n'
+            "Raw JSON only."
+        )
+        try:
+            result = await ctx.brain.query(desc_list, system_prompt=SYSTEM, tier=Tier.FAST, use_conversation=False)
+            result = _re.sub(r',\s*([}\]])', r'\1', result.strip())
+            start = result.find('[')
+            end = result.rfind(']')
+            if start != -1:
+                import json as _json
+                categories = _json.loads(result[start:end + 1])
+                cat_map = {c['description'].lower(): c['category'] for c in categories if 'description' in c}
+                for row in batch:
+                    cat = cat_map.get(row['description'].lower())
+                    if cat and cat != "Other":
+                        await ctx.store.execute(
+                            "UPDATE finance_transactions SET category = ? WHERE id = ?",
+                            (cat, row['id']),
+                        )
+                        await learn_category(ctx.store, row['description'], cat, source="ai")
+                        categorized += 1
+        except Exception:
+            pass
+
+    remaining = len(rows) - categorized
+    return f"Recategorized {categorized} transactions. {remaining} still unknown."

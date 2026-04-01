@@ -82,42 +82,85 @@ async def handle_email_unblock(ctx: AppContext, update: Update, context: Context
 
 
 async def handle_kid_sport(ctx: AppContext, text: str, update: Update) -> str:
-    """Update what sport a kid plays. Stored in google_state, used by email triage."""
+    """Update what sport a kid plays. Stored in google_state, used by email triage.
+
+    Handles corrections like:
+    - "Asher is the soccer player, not Maddox"
+    - "Maddox plays basketball, Asher plays soccer"
+    - "Asher is soccer, Maddox is basketball"
+    """
     tl = text.lower()
 
-    kid = None
-    sport = None
-
-    if "maddox" in tl:
-        kid = "maddox"
-    elif "asher" in tl:
-        kid = "asher"
-
-    # Common sports
     sports = ["basketball", "football", "soccer", "baseball", "hockey", "lacrosse",
               "swimming", "tennis", "golf", "volleyball", "wrestling", "track",
               "cross country", "gymnastics"]
-    for s in sports:
-        if s in tl:
-            sport = s
-            break
 
-    if not kid:
-        return "Which kid? Try: 'Maddox is now playing football'"
-    if not sport:
-        return f"What sport? Try: 'Maddox is now playing football'"
+    # Detect if both kids are mentioned (correction scenario)
+    has_maddox = "maddox" in tl
+    has_asher = "asher" in tl
 
-    await ctx.store.execute(
-        "INSERT INTO google_state (key, value) VALUES (?, ?) "
-        "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-        (f"kid_{kid}_sport", sport),
-    )
-    # Also save as preference
-    await ctx.brain.learn_preference(
-        f"{kid.capitalize()} plays {sport.upper()} (not other sports)",
-        learned_from="kid_sport_update"
-    )
-    return f"Got it — {kid.capitalize()} now plays {sport}. I'll update the email triage."
+    found_sports = [s for s in sports if s in tl]
+
+    updates = []
+
+    if has_maddox and has_asher and found_sports:
+        # Both kids mentioned — use Claude to parse the correction
+        result = await ctx.brain.query(
+            text,
+            system_prompt=(
+                'Extract kid-sport assignments from this message. Kids are Maddox (12) and Asher (10). '
+                'Return ONLY JSON array: [{"kid": "maddox", "sport": "..."}, {"kid": "asher", "sport": "..."}]. '
+                'Raw JSON only.'
+            ),
+            tier=Tier.FAST,
+            use_conversation=False,
+        )
+        try:
+            import json
+            start = result.find('[')
+            end = result.rfind(']')
+            if start != -1:
+                pairs = json.loads(result[start:end + 1])
+                for p in pairs:
+                    if p.get('kid') and p.get('sport'):
+                        updates.append((p['kid'].lower(), p['sport'].lower()))
+        except Exception:
+            pass
+
+    if not updates:
+        # Single kid or fallback — original logic
+        kid = None
+        sport = None
+        if has_maddox:
+            kid = "maddox"
+        elif has_asher:
+            kid = "asher"
+
+        for s in sports:
+            if s in tl:
+                sport = s
+                break
+
+        if not kid:
+            return "Which kid? Try: 'Maddox is now playing football'"
+        if not sport:
+            return f"What sport? Try: '{kid.capitalize()} is now playing football'"
+        updates.append((kid, sport))
+
+    confirmations = []
+    for kid, sport in updates:
+        await ctx.store.execute(
+            "INSERT INTO google_state (key, value) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (f"kid_{kid}_sport", sport),
+        )
+        await ctx.brain.learn_preference(
+            f"{kid.capitalize()} plays {sport.upper()} (not other sports)",
+            learned_from="kid_sport_update"
+        )
+        confirmations.append(f"{kid.capitalize()} plays {sport}")
+
+    return f"Got it — {', '.join(confirmations)}. I'll update the email triage."
 
 
 async def handle_gmail_check(ctx: AppContext, update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:

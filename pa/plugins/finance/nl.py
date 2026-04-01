@@ -62,7 +62,7 @@ If unclear: {"action":"unclear"}. Raw JSON only."""
             f"{b['institution']} {b['name']} ({b['type']}): ${b['balance']:,.2f}"
             for b in balances
         )
-        prompt = f"User asked: '{text}'\n\nCurrent balances:\n{data_summary}\n\nAnswer directly."
+        prompt = f"User asked: '{text}'\n\nCurrent balances:\n{data_summary}\n\nAnswer in under 80 words. Numbers first, no upsells."
         return await ctx.brain.query(prompt, tier=Tier.FAST, use_conversation=False)
 
     elif any(w in tl for w in ["debt", "owe", "loan", "mortgage", "payoff"]):
@@ -87,7 +87,7 @@ If unclear: {"action":"unclear"}. Raw JSON only."""
             lines.append(line)
         total = sum(d['balance'] for d in debts) + sum(d['balance'] for d in stored)
         data_summary = "\n".join(lines)
-        prompt = f"User asked: '{text}'\n\nDebt accounts (total ${total:,.2f}):\n{data_summary}\n\nBe specific. Give actionable advice."
+        prompt = f"User asked: '{text}'\n\nDebt accounts (total ${total:,.2f}):\n{data_summary}\n\nList the debts with amounts. Under 80 words unless user asks for a plan."
         return await ctx.brain.query(prompt, tier=Tier.FAST, use_conversation=False)
 
     elif any(w in tl for w in ["spending", "spent", "expenses", "transactions", "charges", "subscription"]):
@@ -102,7 +102,7 @@ If unclear: {"action":"unclear"}. Raw JSON only."""
             f"{t['date']} {t['description'][:35]}: ${t['amount']:,.2f}"
             for t in debits[:20]
         )
-        prompt = f"User asked: '{text}'\n\nLast 30 days spending (total ${total:,.2f}):\n{lines}\n\nIdentify patterns, subscriptions, and areas to cut."
+        prompt = f"User asked: '{text}'\n\nLast 30 days spending (total ${total:,.2f}):\n{lines}\n\nSummarize concisely. Under 80 words unless user asks for detail."
         return await ctx.brain.query(prompt, tier=Tier.FAST, use_conversation=False)
 
     elif any(w in tl for w in ["due", "payment", "bill", "upcoming"]):
@@ -115,7 +115,7 @@ If unclear: {"action":"unclear"}. Raw JSON only."""
             + (f"${d['minimum_payment']:,.2f} due {d['due_date']}" if d.get('due_date') else f"${d['balance']:,.2f}")
             for d in due
         )
-        prompt = f"User asked: '{text}'\n\nUpcoming payments:\n{data_summary}\n\nAnswer clearly, flag anything urgent."
+        prompt = f"User asked: '{text}'\n\nUpcoming payments:\n{data_summary}\n\nList due dates and amounts. Under 80 words."
         return await ctx.brain.query(prompt, tier=Tier.FAST, use_conversation=False)
 
     else:

@@ -80,6 +80,10 @@ Today is """ + today.isoformat() + f" ({today.strftime('%A')}). Raw JSON only."
         (meal_date, meal_type, description, notes),
     )
 
+    # Reset dinner nag backoff — user is engaging with meals
+    from pa.plugins.meals.jobs import reset_dinner_nag
+    await reset_dinner_nag(ctx)
+
     d = datetime.date.fromisoformat(meal_date)
     return f"Planned {meal_type} for {d.strftime('%A %m/%d')}: {description}"
 
@@ -153,3 +157,14 @@ async def handle_grocery_done(ctx: AppContext, update: Any, context: Any) -> str
     if count > 0:
         return f"Checked off: {item_name}"
     return f"Couldn't find '{item_name}' on the grocery list."
+
+
+async def handle_grocery_clear(ctx: AppContext, update: Any, context: Any) -> str:
+    """Clear all items from the grocery list."""
+    count = await ctx.store.execute_rowcount(
+        "UPDATE meals_grocery SET checked = 1 WHERE checked = 0",
+        (),
+    )
+    if count == 0:
+        return "Grocery list is already empty — nothing to clear."
+    return f"Cleared {count} item{'s' if count != 1 else ''} from your grocery list."

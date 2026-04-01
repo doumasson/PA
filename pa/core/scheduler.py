@@ -8,6 +8,42 @@ from pa.plugins import Job
 _CTX = None
 _JOB_REGISTRY: dict[str, Callable] = {}
 
+# Known error → friendly message mapping
+_FRIENDLY_ERRORS: dict[str, str] = {
+    "401": "Bank connection expired. Use /sync to reconnect.",
+    "oauth": "Bank connection expired. Use /sync to reconnect.",
+    "token_expired": "Bank connection expired. Use /sync to reconnect.",
+    "invalid_grant": "Gmail connection expired. Run /gmail_auth to reconnect.",
+    "refresh_token": "Gmail connection expired. Run /gmail_auth to reconnect.",
+    "timeout": "Couldn't reach the service. Will retry next check.",
+    "timed out": "Couldn't reach the service. Will retry next check.",
+    "connectionerror": "Couldn't reach the service. Will retry next check.",
+}
+
+# Track recent error notifications: (source, error_type) → timestamp
+_recent_error_notifications: dict[tuple[str, str], float] = {}
+
+
+def _format_error(job_name: str, error: Exception) -> str:
+    """Convert raw errors to human-readable messages."""
+    err_str = str(error).lower()
+    for pattern, friendly in _FRIENDLY_ERRORS.items():
+        if pattern in err_str:
+            return friendly
+    return f"Something went wrong with {job_name}. Check logs for details."
+
+
+def _should_notify_error(source: str, error_type: str) -> bool:
+    """Suppress duplicate error notifications within 24 hours."""
+    import time
+    key = (source, error_type)
+    now = time.time()
+    last = _recent_error_notifications.get(key, 0)
+    if now - last < 86400:  # 24 hours
+        return False
+    _recent_error_notifications[key] = now
+    return True
+
 
 async def _job_dispatcher(job_name: str = "unknown") -> None:
     """Dispatch jobs by name from the registry — no hardcoded if/elif."""
@@ -26,19 +62,22 @@ async def _job_dispatcher(job_name: str = "unknown") -> None:
         import traceback
         print(f"Job {job_name} error: {traceback.format_exc()}")
         # Self-healing: log error to DB
+        source = f"job:{job_name}"
+        error_type = type(e).__name__
         try:
             await _CTX.store.execute(
                 """INSERT INTO core_errors (source, error_type, message, last_seen)
                    VALUES (?, ?, ?, CURRENT_TIMESTAMP)
                    ON CONFLICT DO NOTHING""",
-                (f"job:{job_name}", type(e).__name__, str(e)[:500])
+                (source, error_type, str(e)[:500])
             )
         except Exception:
             pass
-        # Notify user
+        # Notify user with friendly message (suppress repeats)
         try:
-            if _CTX.bot:
-                await _CTX.bot.send_message(f"Job {job_name} failed: {str(e)[:200]}")
+            if _CTX.bot and _should_notify_error(source, error_type):
+                friendly = _format_error(job_name, e)
+                await _CTX.bot.send_message(friendly)
         except Exception:
             pass
 

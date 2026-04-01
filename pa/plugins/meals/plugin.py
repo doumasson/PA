@@ -4,6 +4,7 @@ from pathlib import Path
 from pa.plugins import PluginBase, Command, NLHandler
 from pa.plugins.meals.commands import (
     handle_meals, handle_meal, handle_grocery, handle_grocery_add, handle_grocery_done,
+    handle_grocery_clear,
 )
 from pa.plugins.meals.nl import handle_meals_nl
 from pa.plugins.meals.jobs import get_meals_jobs
@@ -15,6 +16,9 @@ _NL_KEYWORDS = [
     "grocery list", "need to buy", "pick up from store",
     "add to grocery", "shopping list", "whats for lunch",
     "whats for dinner",
+    "clear grocery", "clear shopping", "clear the list", "clear my list",
+    "empty the list", "done shopping", "check off everything",
+    "delete grocery", "wipe the list",
 ]
 
 
@@ -33,6 +37,7 @@ class MealsPlugin(PluginBase):
             Command(name="grocery", description="View grocery list", handler=handle_grocery),
             Command(name="grocery_add", description="Add to grocery list", handler=handle_grocery_add),
             Command(name="grocery_done", description="Check off grocery item", handler=handle_grocery_done),
+            Command(name="grocery_clear", description="Clear grocery list", handler=handle_grocery_clear),
         ]
 
     def jobs(self) -> list:

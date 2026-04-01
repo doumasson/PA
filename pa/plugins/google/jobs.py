@@ -28,6 +28,14 @@ async def check_gmail(ctx) -> None:
     if not emails:
         return
 
+    # TTL cleanup: purge notification records older than 14 days
+    await _cleanup_old_notifications(ctx.store)
+
+    # Dedup: skip emails we already notified about
+    emails = await _filter_already_notified(ctx.store, emails)
+    if not emails:
+        return
+
     # Pre-filter: drop emails matching blocklist BEFORE sending to Haiku (zero API cost)
     try:
         blocks = await ctx.store.fetchall("SELECT block_type, pattern FROM google_email_blocks")
@@ -116,11 +124,16 @@ Kids sports — IMPORTANT:
 - If an email mentions {asher_sport.lower()}, it's about ASHER
 - If an email mentions {maddox_sport.lower()}, it's about MADDOX
 
-Bill extraction rules:
-- Extract balance from any statement/bill/payment email
-- due_date in YYYY-MM-DD format, assume 2026
-- status: charged_off if email mentions charge-off/collections, past_due if overdue
-- Set bill=null if no financial data found
+Bill extraction rules — BE AGGRESSIVE:
+- Extract from ANY email resembling a statement, collection notice, past-due alert, payment confirmation, or balance notification
+- Look for: "balance", "amount due", "minimum payment", "past due", "charged off", "collections", "amount owed", "statement", "payment due"
+- institution = the company name (e.g. "CreditOne", "Mission Lane", "AdventHealth")
+- account_name = specific card/account name if available, else same as institution
+- account_type: credit_card for credit cards, loan for personal/auto loans, mortgage for home loans, utility for bills
+- due_date in YYYY-MM-DD format, assume 2026 if year not specified
+- status: charged_off if email mentions charge-off/collections/written off, past_due if overdue/late, current otherwise
+- minimum_payment: extract if available
+- Set bill=null ONLY if there is absolutely no financial data in the email
 {pref_block}
 When in doubt: noise with notify=false.
 Speak results only as JSON array, no markdown."""
@@ -224,6 +237,11 @@ Speak results only as JSON array, no markdown."""
         ('last_gmail_check', str(now))
     )
 
+    # Record notified email IDs so we don't re-notify
+    notified_ids = [em['id'] for em in emails if classified.get(em['id'])]
+    if notified_ids:
+        await _record_notified_emails(ctx.store, notified_ids)
+
     # Send notifications
     if notifications:
         deduped = list(dict.fromkeys(notifications))
@@ -232,6 +250,39 @@ Speak results only as JSON array, no markdown."""
     # Log bill updates silently (no message unless something new)
     if bills_updated:
         log.info("Bills updated from email: %s", ', '.join(bills_updated))
+
+
+async def _filter_already_notified(store, emails: list[dict]) -> list[dict]:
+    """Remove emails we've already notified about."""
+    if not emails:
+        return emails
+    ids = [em['id'] for em in emails]
+    placeholders = ','.join('?' for _ in ids)
+    rows = await store.fetchall(
+        f"SELECT message_id FROM google_notified_emails WHERE message_id IN ({placeholders})",
+        tuple(ids),
+    )
+    seen = {r['message_id'] for r in rows}
+    filtered = [em for em in emails if em['id'] not in seen]
+    if len(filtered) < len(emails):
+        log.info("Email dedup filtered %d/%d already-notified emails", len(emails) - len(filtered), len(emails))
+    return filtered
+
+
+async def _record_notified_emails(store, message_ids: list[str]) -> None:
+    """Record email IDs we've notified about."""
+    for mid in message_ids:
+        await store.execute(
+            "INSERT OR IGNORE INTO google_notified_emails (message_id) VALUES (?)",
+            (mid,),
+        )
+
+
+async def _cleanup_old_notifications(store) -> None:
+    """Delete notification records older than 14 days."""
+    await store.execute(
+        "DELETE FROM google_notified_emails WHERE notified_at < datetime('now', '-14 days')",
+    )
 
 
 def get_google_jobs() -> list[Job]:

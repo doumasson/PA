@@ -16,7 +16,7 @@ async def handle_meals_nl(ctx: AppContext, text: str, update: Update) -> str:
     today = datetime.date.today()
 
     PARSE = """Parse this message about meals or groceries. Return ONLY JSON:
-{"intent": "query_meal|add_meal|query_grocery|add_grocery|check_grocery",
+{"intent": "query_meal|add_meal|query_grocery|add_grocery|check_grocery|clear_grocery",
  "date": "YYYY-MM-DD or null",
  "meal_type": "breakfast|lunch|dinner|snack|null",
  "description": "meal description or null",
@@ -112,5 +112,14 @@ Today is """ + today.isoformat() + f" ({today.strftime('%A')}). Raw JSON only."
         if count > 0:
             return f"Checked off: {item_name}"
         return f"Couldn't find '{item_name}' on the grocery list."
+
+    if intent == "clear_grocery":
+        count = await ctx.store.execute_rowcount(
+            "UPDATE meals_grocery SET checked = 1 WHERE checked = 0",
+            (),
+        )
+        if count == 0:
+            return "Grocery list is already empty — nothing to clear."
+        return f"Cleared {count} item{'s' if count != 1 else ''} from your grocery list."
 
     return "I'm not sure what you mean. Try 'What's for dinner?' or 'Add eggs to the grocery list'."

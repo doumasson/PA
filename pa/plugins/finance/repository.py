@@ -63,6 +63,12 @@ class FinanceRepository:
                     (description, dedup_hash, existing['id']),
                 )
             return False  # Not a new transaction
+
+        # Auto-categorize at ingest if no category provided
+        if not category or category in ("general", ""):
+            from pa.plugins.finance.merchants import get_category
+            category = await get_category(self._store, description)
+
         rows_affected = await self._store.execute_rowcount(
             "INSERT OR IGNORE INTO finance_transactions (account_id, date, posted_date, description, amount, category, dedup_hash, is_pending) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (account_id, date, posted_date, description, amount, category, dedup_hash, is_pending),
