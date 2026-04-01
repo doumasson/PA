@@ -74,12 +74,16 @@ async def get_spending_by_merchant(ctx, merchant, days=30):
     repo = FinanceRepository(ctx.store)
     since = (datetime.date.today() - datetime.timedelta(days=days)).isoformat()
     txns = await repo.get_transactions(since_date=since, limit=500)
-    # Fuzzy match: all words in merchant name must appear in the description
+    # Fuzzy match: each merchant word must appear as a prefix of any word in the description
+    # e.g. "hilltop liquors" matches "HILLTOP LIQU" because "liqu" starts with "liqu"
     merchant_words = merchant.lower().split()
-    matches = [
-        t for t in txns
-        if all(w in t['description'].lower() for w in merchant_words) and t['amount'] > 0
-    ]
+    def _fuzzy_match(desc: str) -> bool:
+        desc_words = desc.lower().split()
+        return all(
+            any(dw.startswith(mw[:4]) or mw.startswith(dw[:4]) for dw in desc_words)
+            for mw in merchant_words
+        )
+    matches = [t for t in txns if _fuzzy_match(t['description']) and t['amount'] > 0]
     if not matches:
         return f"I find no record of spending at {merchant} in the last {days} days."
     await categorize_transactions(ctx.store, matches)
