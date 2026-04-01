@@ -419,8 +419,8 @@ async def run_advisor(ctx, user_question: str = None, include_gmail: bool = Fals
             "7. DATA GAPS: What info do you still need? Ask ONE specific question.\n"
         )
 
-    # Use Claude subscription (CLI) for the heavy analysis — free, better quality
-    result = await ctx.brain.query_subscription(prompt, system_prompt=ADVISOR_SYSTEM)
+    # Heavy analysis via CLIProxyAPI subscription — free, no cost concern
+    result = await ctx.brain.query(prompt, system_prompt=ADVISOR_SYSTEM, tier=Tier.DEEP, use_conversation=False)
 
     # Save to memory
     await save_profile(ctx, 'last_advice_summary', result[:500])
@@ -443,18 +443,19 @@ async def run_advisor(ctx, user_question: str = None, include_gmail: bool = Fals
 async def update_debt(ctx, institution: str, account_name: str,
                       balance: float, status: str = 'current',
                       minimum_payment: float = None, apr: float = None,
-                      due_date: str = None, notes: str = None) -> None:
+                      due_date: str = None, notes: str = None,
+                      account_type: str = 'credit_card') -> None:
     now = datetime.datetime.now().isoformat()
     await ctx.store.execute(
         """INSERT INTO finance_debts
            (institution, account_name, account_type, balance, minimum_payment,
             apr, due_date, status, notes, updated_at)
-           VALUES (?, ?, 'credit_card', ?, ?, ?, ?, ?, ?, ?)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(institution, account_name) DO UPDATE SET
            balance=excluded.balance, minimum_payment=excluded.minimum_payment,
            apr=excluded.apr, due_date=excluded.due_date, status=excluded.status,
            notes=excluded.notes, updated_at=excluded.updated_at""",
-        (institution, account_name, balance, minimum_payment,
+        (institution, account_name, account_type, balance, minimum_payment,
          apr, due_date, status, notes, now)
     )
 

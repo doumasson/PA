@@ -47,6 +47,38 @@ def _extract_text_from_payload(payload: dict) -> str:
     return ''
 
 
+def search_emails(service, query: str, max_results: int = 10, fetch_body: bool = True) -> list[dict]:
+    """Search Gmail with any Gmail search query (e.g. 'from:homedepot subject:statement')."""
+    result = service.users().messages().list(
+        userId='me', q=query, maxResults=max_results
+    ).execute()
+
+    messages = result.get('messages', [])
+    emails = []
+    for msg in messages:
+        fmt = 'full' if fetch_body else 'metadata'
+        full = service.users().messages().get(
+            userId='me', id=msg['id'], format=fmt,
+            metadataHeaders=['From', 'Subject', 'Date']
+        ).execute()
+
+        headers = {h['name']: h['value'] for h in full['payload']['headers']}
+        body = ''
+        if fetch_body:
+            body = _extract_text_from_payload(full['payload'])[:3000]
+
+        emails.append({
+            'id': msg['id'],
+            'subject': headers.get('Subject', '(no subject)'),
+            'sender': headers.get('From', 'unknown'),
+            'date': headers.get('Date', ''),
+            'snippet': full.get('snippet', '')[:300],
+            'body': body,
+        })
+
+    return emails
+
+
 def get_unread_since(service, since_timestamp: int | None = None, max_results: int = 20) -> list[dict]:
     """Fetch unread emails from today only."""
     query = "is:unread"

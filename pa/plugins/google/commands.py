@@ -191,8 +191,128 @@ async def handle_gmail_nl(ctx: AppContext, text: str, update: Update) -> str:
         except Exception as e:
             return f"Gmail error: {e}"
 
-    return await ctx.brain.query(
-        f"User asked about email/calendar: '{text}'. "
-        f"Tell them they can use /gmail to check email, or ask me to check for them.",
-        tier=Tier.FAST
-    )
+    # For calendar queries
+    if any(w in tl for w in ["calendar", "schedule", "appointment"]):
+        return await ctx.brain.query(
+            f"User asked about calendar: '{text}'. Tell them you can check their calendar.",
+            tier=Tier.FAST
+        )
+
+    # Default: check gmail
+    await update.message.reply_text("Checking Gmail...")
+    from pa.plugins.google.jobs import check_gmail
+    try:
+        await check_gmail(ctx)
+        return "Done — I'll message you if anything needs attention."
+    except Exception as e:
+        return f"Gmail error: {e}"
+
+
+async def handle_email_search(ctx: AppContext, text: str, update: Update) -> str:
+    """Search for specific emails and extract data (balances, due dates, etc.)."""
+    if not ctx.vault.is_unlocked:
+        return "Vault is locked. Send /unlock first."
+
+    # Use Claude to parse what the user is looking for
+    PARSE = """Parse this email search request. Return ONLY JSON:
+{"sender": "company name or null", "subject": "subject keywords or null", "action": "search"|"extract_balance"|"extract_and_save", "days_back": 7}
+If the user wants to find a balance/statement and save it as a debt, use "extract_and_save".
+Raw JSON only."""
+
+    import json
+    result = await ctx.brain.query(text, system_prompt=PARSE, tier=Tier.FAST, use_conversation=False)
+    try:
+        data = json.loads(result[result.find('{'):result.rfind('}') + 1])
+    except Exception:
+        data = {"sender": None, "subject": None, "action": "search", "days_back": 7}
+
+    # Build Gmail search query
+    parts = []
+    if data.get("sender"):
+        parts.append(f"from:{data['sender']}")
+    if data.get("subject"):
+        parts.append(f"subject:{data['subject']}")
+    days = data.get("days_back", 7)
+    if days and days <= 30:
+        from datetime import datetime, timedelta
+        after = (datetime.now() - timedelta(days=days)).strftime("%Y/%m/%d")
+        parts.append(f"after:{after}")
+
+    query = " ".join(parts) if parts else "is:unread"
+
+    await update.message.reply_text(f"Searching emails: {query}...")
+
+    from pa.plugins.google.client import gmail_service
+    from pa.plugins.google.gmail import search_emails
+    try:
+        gmail = gmail_service(ctx.vault)
+        emails = search_emails(gmail, query, max_results=5, fetch_body=True)
+    except Exception as e:
+        return f"Gmail error: {e}"
+
+    if not emails:
+        return f"No emails found matching: {query}"
+
+    # Build summary for Claude to analyze
+    email_summaries = []
+    for e in emails:
+        summary = f"From: {e['sender']}\nSubject: {e['subject']}\nDate: {e['date']}\n"
+        if e['body']:
+            summary += f"Body excerpt: {e['body'][:1000]}\n"
+        else:
+            summary += f"Snippet: {e['snippet']}\n"
+        email_summaries.append(summary)
+
+    all_emails = "\n---\n".join(email_summaries)
+
+    # If user wants to extract and save a balance
+    if data.get("action") in ("extract_balance", "extract_and_save"):
+        EXTRACT = """From the emails below, extract financial data. Return ONLY JSON:
+{"institution": "company name", "account_name": "card/account name", "account_type": "credit_card"|"store_card"|"charge_card"|"loan"|"mortgage"|"medical"|"utility",
+ "balance": 0.00, "minimum_payment": 0.00, "due_date": "YYYY-MM-DD or null"}
+If multiple accounts found, return a JSON array of these objects.
+Raw JSON only."""
+
+        extract_result = await ctx.brain.query(
+            f"User asked: {text}\n\nEmails:\n{all_emails}",
+            system_prompt=EXTRACT, tier=Tier.STANDARD, use_conversation=False
+        )
+
+        try:
+            extracted = json.loads(extract_result[extract_result.find('{'):extract_result.rfind('}') + 1])
+            if not isinstance(extracted, list):
+                extracted = [extracted]
+        except Exception:
+            try:
+                extracted = json.loads(extract_result[extract_result.find('['):extract_result.rfind(']') + 1])
+            except Exception:
+                return f"Found {len(emails)} emails but couldn't extract balance data. Here's what I found:\n\n{emails[0]['snippet']}"
+
+        # Save extracted debts
+        from pa.plugins.finance.advisor import update_debt
+        results = []
+        for item in extracted:
+            if item.get("balance") is not None:
+                await update_debt(
+                    ctx,
+                    institution=item.get("institution", "Unknown"),
+                    account_name=item.get("account_name", "Account"),
+                    balance=float(item["balance"]),
+                    minimum_payment=float(item["minimum_payment"]) if item.get("minimum_payment") else None,
+                    due_date=item.get("due_date"),
+                    account_type=item.get("account_type", "credit_card"),
+                )
+                results.append(
+                    f"**{item.get('institution')}** {item.get('account_name')}: "
+                    f"${float(item['balance']):,.2f}"
+                    + (f" (min payment: ${float(item['minimum_payment']):,.2f})" if item.get('minimum_payment') else "")
+                    + (f" due {item['due_date']}" if item.get('due_date') else "")
+                )
+
+        if results:
+            return "Extracted and saved:\n" + "\n".join(results)
+        return "Found emails but couldn't extract balance data."
+
+    # Default: just summarize the emails
+    SUMMARIZE = f"User asked: '{text}'\n\nFound {len(emails)} emails:\n{all_emails}\n\nSummarize what's relevant. Be concise."
+    return await ctx.brain.query(SUMMARIZE, tier=Tier.FAST, use_conversation=False)

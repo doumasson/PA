@@ -2,7 +2,7 @@ CREATE TABLE IF NOT EXISTS finance_accounts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     institution TEXT NOT NULL,
     name TEXT NOT NULL,
-    type TEXT NOT NULL CHECK(type IN ('checking', 'savings', 'credit_card', 'mortgage', 'loan')),
+    type TEXT NOT NULL CHECK(type IN ('checking', 'savings', 'credit_card', 'charge_card', 'store_card', 'mortgage', 'loan', 'medical', 'utility', 'credit')),
     interest_rate REAL,
     credit_limit REAL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP

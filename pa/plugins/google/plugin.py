@@ -3,6 +3,7 @@ from pa.plugins.google.jobs import get_google_jobs
 from pa.plugins.google.commands import (
     handle_gmail_check, handle_gmail_nl, handle_email_block,
     handle_email_blocks, handle_email_unblock, handle_kid_sport,
+    handle_email_search,
 )
 
 
@@ -78,6 +79,14 @@ CREATE TABLE IF NOT EXISTS google_email_blocks (
                 intent_id="google.bill_scan",
                 description="Scan Gmail for recurring bills and extract bill information",
                 examples=["scan my email for bills", "find my bills in Gmail", "what bills do I have"],
+            ),
+            NLHandler(
+                keywords=["find email", "search email", "email from", "statement from", "balance from email"],
+                handler=handle_email_search,
+                priority=14,
+                intent_id="google.email_search",
+                description="Search for specific emails by sender/subject, extract balances or data from emails, find statements",
+                examples=["find the Home Depot email and get my balance", "search for emails from Citibank", "look through my emails for a statement from Capital One"],
             ),
             NLHandler(
                 keywords=["email", "gmail", "inbox", "message", "mail", "important", "anything important"],
