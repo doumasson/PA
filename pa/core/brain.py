@@ -37,6 +37,7 @@ class Brain:
         self._conv_max = 20  # sliding window
         self._preferences: list[str] = []
         self._intent_examples: list[dict] = []
+        self._learned_plans: list[dict] = []  # cached action plans
 
     def set_store(self, store) -> None:
         self._store = store
@@ -63,6 +64,14 @@ class Brain:
             "SELECT message, intent_id FROM core_intent_examples ORDER BY id DESC LIMIT 50"
         )
         self._intent_examples = [{"message": r["message"], "intent_id": r["intent_id"]} for r in rows]
+        # Load learned action plans
+        rows = await store.fetchall(
+            "SELECT id, pattern_words, actions_json, hit_count FROM core_learned_plans ORDER BY hit_count DESC LIMIT 100"
+        )
+        self._learned_plans = [
+            {"id": r["id"], "words": set(r["pattern_words"].split()), "actions_json": r["actions_json"], "hits": r["hit_count"]}
+            for r in rows
+        ]
 
     async def remember_message(self, role: str, content: str) -> None:
         """Add a message to conversation memory."""
@@ -223,6 +232,91 @@ class Brain:
         except Exception:
             pass
 
+    # Noise words to strip when building pattern signatures
+    _STOP_WORDS = frozenset({
+        "a", "an", "the", "is", "are", "was", "were", "be", "been", "am",
+        "i", "me", "my", "you", "your", "we", "our", "he", "she", "it",
+        "do", "does", "did", "have", "has", "had", "can", "could", "would",
+        "should", "will", "shall", "may", "might", "to", "of", "in", "for",
+        "on", "at", "by", "from", "with", "and", "or", "but", "not", "no",
+        "if", "so", "up", "out", "just", "about", "that", "this", "what",
+        "how", "much", "many", "some", "any", "all", "very", "too", "also",
+        "been", "being", "get", "got", "go", "going", "let", "please",
+        "hey", "hi", "hello", "ok", "yeah", "yes", "no", "uh", "um",
+    })
+
+    @classmethod
+    def _extract_pattern_words(cls, message: str) -> set[str]:
+        """Extract significant words from a message for pattern matching."""
+        import re
+        words = set(re.findall(r'[a-z]+', message.lower()))
+        return words - cls._STOP_WORDS
+
+    def _match_learned_plan(self, message: str) -> dict | None:
+        """Check if a message matches a learned action plan. Returns plan or None."""
+        msg_words = self._extract_pattern_words(message)
+        if len(msg_words) < 2:
+            return None
+
+        best_match = None
+        best_score = 0.0
+
+        for plan in self._learned_plans:
+            pattern_words = plan["words"]
+            if not pattern_words:
+                continue
+            # Jaccard similarity: intersection / union
+            intersection = msg_words & pattern_words
+            union = msg_words | pattern_words
+            score = len(intersection) / len(union) if union else 0
+
+            # Boost score for plans with more hits (proven patterns)
+            if plan["hits"] > 5:
+                score *= 1.1
+            if plan["hits"] > 20:
+                score *= 1.1
+
+            if score > best_score:
+                best_score = score
+                best_match = plan
+
+        # Require 60% similarity to use cached plan
+        if best_score >= 0.6 and best_match:
+            return json.loads(best_match["actions_json"])
+        return None
+
+    async def _save_learned_plan(self, message: str, plan: dict) -> None:
+        """Save a successful action plan for future local matching."""
+        if not self._store:
+            return
+        words = self._extract_pattern_words(message)
+        if len(words) < 2:
+            return
+        pattern_str = " ".join(sorted(words))
+        actions_str = json.dumps(plan)
+
+        # Check if we already have a similar pattern
+        for lp in self._learned_plans:
+            intersection = words & lp["words"]
+            union = words | lp["words"]
+            if len(union) > 0 and len(intersection) / len(union) >= 0.7:
+                # Update existing pattern
+                await self._store.execute(
+                    "UPDATE core_learned_plans SET hit_count = hit_count + 1, last_used = CURRENT_TIMESTAMP WHERE id = ?",
+                    (lp["id"],)
+                )
+                lp["hits"] += 1
+                return
+
+        # Save new pattern
+        row_id = await self._store.execute(
+            "INSERT INTO core_learned_plans (pattern_words, actions_json) VALUES (?, ?)",
+            (pattern_str, actions_str)
+        )
+        self._learned_plans.append({
+            "id": row_id, "words": words, "actions_json": actions_str, "hits": 1
+        })
+
     async def plan_actions(
         self,
         user_message: str,
@@ -231,9 +325,16 @@ class Brain:
     ) -> dict:
         """Plan a sequence of actions to fulfill the user's request.
 
+        Checks learned patterns first (no Claude call needed).
+        Falls back to Claude for novel requests, then learns the pattern.
+
         Returns {"actions": [{"intent_id": str, "reason": str}], "synthesize": bool}
         Empty actions = general conversation.
         """
+        # Try local pattern matching first (zero Claude calls)
+        cached = self._match_learned_plan(user_message)
+        if cached:
+            return cached
         catalog_lines = []
         for h in handler_catalog:
             line = f"- {h['intent_id']}: {h['description']}"
@@ -279,7 +380,11 @@ class Brain:
             )
             actions = result.get("actions", [])
             synthesize = result.get("synthesize", False)
-            return {"actions": actions, "synthesize": synthesize}
+            plan = {"actions": actions, "synthesize": synthesize}
+            # Learn this plan for future local matching
+            if actions:
+                await self._save_learned_plan(user_message, plan)
+            return plan
         except Exception:
             return {"actions": [], "synthesize": False}
 

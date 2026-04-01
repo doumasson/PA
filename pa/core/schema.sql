@@ -66,3 +66,13 @@ CREATE TABLE IF NOT EXISTS core_intent_examples (
 
 CREATE INDEX IF NOT EXISTS idx_intent_examples_intent
     ON core_intent_examples(intent_id);
+
+-- Learned action plans (message pattern → action sequence, skips Claude call)
+CREATE TABLE IF NOT EXISTS core_learned_plans (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    pattern_words TEXT NOT NULL,
+    actions_json TEXT NOT NULL,
+    hit_count INTEGER NOT NULL DEFAULT 1,
+    last_used TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
