@@ -183,17 +183,11 @@ async def handle_gmail_nl(ctx: AppContext, text: str, update: Update) -> str:
     tl = text.lower()
 
     if any(w in tl for w in ["check", "any emails", "any email", "emails", "what's in", "inbox", "new email", "unread", "critical", "important", "urgent"]):
-        await update.message.reply_text("Checking Gmail now...")
+        await update.message.reply_text("Checking Gmail...")
         from pa.plugins.google.jobs import check_gmail
-        from pa.plugins.google.client import gmail_service
-        from pa.plugins.google.gmail import get_unread_since
         try:
-            gmail = gmail_service(ctx.vault)
-            emails = get_unread_since(gmail, max_results=5)
-            count = len(emails)
-            if count == 0:
-                return "No unread emails."
-            return f"You have {count} unread emails. Triaging now..."
+            await check_gmail(ctx)
+            return "Done — I'll message you if anything needs attention."
         except Exception as e:
             return f"Gmail error: {e}"
 
