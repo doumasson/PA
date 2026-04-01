@@ -213,6 +213,32 @@ async def handle_email_search(ctx: AppContext, text: str, update: Update) -> str
     if not ctx.vault.is_unlocked:
         return "Vault is locked. Send /unlock first."
 
+    # Check if we already have this data in the debts DB
+    tl = text.lower()
+    debts = await ctx.store.fetchall(
+        "SELECT institution, account_name, balance, minimum_payment, due_date, updated_at "
+        "FROM finance_debts ORDER BY updated_at DESC"
+    )
+    if debts:
+        # See if any stored debt matches what the user is asking about
+        for d in debts:
+            inst = d['institution'].lower()
+            if inst in tl or any(w in tl for w in inst.split()):
+                # Data exists and is less than 24 hours old
+                import datetime
+                try:
+                    updated = datetime.datetime.fromisoformat(d['updated_at'])
+                    age = datetime.datetime.now() - updated
+                    if age.total_seconds() < 86400:
+                        line = f"**{d['institution']}** {d['account_name']}: ${d['balance']:,.2f}"
+                        if d.get('minimum_payment'):
+                            line += f" (min payment: ${d['minimum_payment']:,.2f})"
+                        if d.get('due_date'):
+                            line += f" due {d['due_date']}"
+                        return line
+                except Exception:
+                    pass
+
     # Use Claude to parse what the user is looking for
     PARSE = """Parse this email search request. Return ONLY JSON:
 {"sender": "company name or null", "subject": "subject keywords or null", "action": "search"|"extract_balance"|"extract_and_save", "days_back": 7}
@@ -269,8 +295,8 @@ Raw JSON only."""
 
     all_emails = "\n---\n".join(email_summaries)
 
-    # Extract financial data from emails (default behavior for any financial query)
-    if data.get("action") in ("extract_balance", "extract_and_save", "search"):
+    # Always extract and save financial data from emails
+    if True:
         EXTRACT = """From the emails below, extract financial data. Return ONLY JSON:
 {"institution": "company name", "account_name": "card/account name", "account_type": "credit_card"|"store_card"|"charge_card"|"loan"|"mortgage"|"medical"|"utility",
  "balance": 0.00, "minimum_payment": 0.00, "due_date": "YYYY-MM-DD or null"}
@@ -292,24 +318,21 @@ Raw JSON only."""
             except Exception:
                 return f"Found {len(emails)} emails but couldn't extract balance data. Here's what I found:\n\n{emails[0]['snippet']}"
 
-        # Save extracted debts if action warrants it
-        should_save = data.get("action") in ("extract_and_save", "extract_balance")
-        if should_save:
-            from pa.plugins.finance.advisor import update_debt
+        # Always save extracted data to debts
+        from pa.plugins.finance.advisor import update_debt
 
         results = []
         for item in extracted:
             if item.get("balance") is not None:
-                if should_save:
-                    await update_debt(
-                        ctx,
-                        institution=item.get("institution", "Unknown"),
-                        account_name=item.get("account_name", "Account"),
-                        balance=float(item["balance"]),
-                        minimum_payment=float(item["minimum_payment"]) if item.get("minimum_payment") else None,
-                        due_date=item.get("due_date"),
-                        account_type=item.get("account_type", "credit_card"),
-                    )
+                await update_debt(
+                    ctx,
+                    institution=item.get("institution", "Unknown"),
+                    account_name=item.get("account_name", "Account"),
+                    balance=float(item["balance"]),
+                    minimum_payment=float(item["minimum_payment"]) if item.get("minimum_payment") else None,
+                    due_date=item.get("due_date"),
+                    account_type=item.get("account_type", "credit_card"),
+                )
                 line = (
                     f"**{item.get('institution')}** {item.get('account_name')}: "
                     f"${float(item['balance']):,.2f}"
@@ -319,8 +342,7 @@ Raw JSON only."""
                 results.append(line)
 
         if results:
-            prefix = "Extracted and saved to debts:\n" if should_save else "Found in emails:\n"
-            return prefix + "\n".join(results)
+            return "Extracted and saved:\n" + "\n".join(results)
 
         # Fallback: summarize if no financial data found
         SUMMARIZE = f"User asked: '{text}'\n\nFound {len(emails)} emails:\n{all_emails}\n\nSummarize what's relevant. Be concise."
