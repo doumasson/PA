@@ -343,6 +343,10 @@ async def job_spending_pace_check(ctx) -> None:
         today = datetime.date.today()
         first_of_month = today.replace(day=1)
         days_elapsed = (today - first_of_month).days or 1
+
+        # Need at least 5 days of data for a meaningful projection
+        if days_elapsed < 5:
+            return
         days_in_month = (
             (first_of_month.replace(month=first_of_month.month % 12 + 1, day=1)
              if first_of_month.month < 12

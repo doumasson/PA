@@ -19,6 +19,9 @@ _NL_KEYWORDS = [
     "clear grocery", "clear shopping", "clear the list", "clear my list",
     "empty the list", "done shopping", "check off everything",
     "delete grocery", "wipe the list",
+    "ordered", "having for dinner", "making for dinner",
+    "cooking", "i ordered", "we ordered", "getting pizza",
+    "having pizza", "eating", "i ate", "we ate",
 ]
 
 
@@ -48,10 +51,10 @@ class MealsPlugin(PluginBase):
             NLHandler(
                 keywords=_NL_KEYWORDS,
                 handler=handle_meals_nl,
-                description="Meal planning, dinner ideas, grocery/shopping list management",
+                description="Meal planning, recording meals eaten/ordered, dinner ideas, grocery/shopping list management",
                 priority=10,
                 intent_id="meals.plan",
-                examples=["what's for dinner tonight", "add milk to the grocery list", "clear my shopping list"],
+                examples=["what's for dinner tonight", "I ordered pizza", "we're having tacos", "add milk to the grocery list", "clear my shopping list"],
             ),
         ]
 
