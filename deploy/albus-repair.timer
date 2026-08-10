@@ -1,0 +1,10 @@
+[Unit]
+Description=Run the Albus repair daemon every 2 minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitInactiveSec=2min
+Unit=albus-repair.service
+
+[Install]
+WantedBy=timers.target

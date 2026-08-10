@@ -1,0 +1,9 @@
+host: "127.0.0.1"
+port: 8317
+auth-dir: "~/.cli-proxy-api"
+api-keys: []
+debug: false
+request-retry: 3
+quota-exceeded:
+  switch-project: false
+  switch-preview-model: false

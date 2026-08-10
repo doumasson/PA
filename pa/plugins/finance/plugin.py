@@ -1,0 +1,132 @@
+from pathlib import Path
+from pa.plugins import AppContext, PluginBase, Callback, Command, NLHandler
+from pa.plugins.finance.nl import handle_finance_nl, handle_affordability_nl
+from pa.plugins.finance.advisor_commands import handle_advisor, handle_debt_update, handle_advisor_nl
+from pa.plugins.finance.billmaster import handle_bills_audit, handle_billmaster_callback
+from pa.plugins.finance.commands import (
+    handle_balance, handle_bill_add, handle_bill_paid, handle_bills,
+    handle_budget, handle_budget_set, handle_budget_del,
+    handle_debt, handle_due, handle_forecast, handle_guardian, handle_spending, handle_trend,
+    handle_plan, handle_recat, handle_scrape, handle_schedule, handle_backup,
+)
+from pa.plugins.finance.jobs import get_finance_jobs
+
+_SCHEMA_PATH = Path(__file__).parent / "schema.sql"
+_ADVISOR_SCHEMA_PATH = Path(__file__).parent / "advisor_schema.sql"
+
+
+class FinancePlugin(PluginBase):
+    name = "finance"
+    description = "Financial tracking, analysis, debt management and Bart (financial advisor)"
+    version = "0.2.0"
+
+    _profile = None
+
+    async def on_startup(self, ctx: AppContext) -> None:
+        self._profile = ctx.profile
+        # Migration: teller_id landed after DBs already existed, and the
+        # index can only be created once the column is present, so both
+        # live here rather than in schema.sql (which runs first at boot).
+        cols = await ctx.store.fetchall("PRAGMA table_info(finance_transactions)")
+        if not any(c["name"] == "teller_id" for c in cols):
+            await ctx.store.execute("ALTER TABLE finance_transactions ADD COLUMN teller_id TEXT")
+        await ctx.store.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_finance_txn_teller_id "
+            "ON finance_transactions(teller_id) WHERE teller_id IS NOT NULL"
+        )
+
+    def schema_sql(self) -> str:
+        base = _SCHEMA_PATH.read_text(encoding="utf-8")
+        advisor = _ADVISOR_SCHEMA_PATH.read_text(encoding="utf-8") if _ADVISOR_SCHEMA_PATH.exists() else ""
+        return base + advisor
+
+    def commands(self) -> list[Command]:
+        return [
+            Command(name="balance", description="Account balances", handler=handle_balance),
+            Command(name="debt", description="Debt summary", handler=handle_debt),
+            Command(name="due", description="Upcoming payments", handler=handle_due),
+            Command(name="spending", description="Spending breakdown", handler=handle_spending, aliases=["spend"]),
+            Command(name="trend", description="Monthly spending trends", handler=handle_trend, aliases=["trends"]),
+            Command(name="plan", description="Debt payoff plan (AI)", handler=handle_plan),
+            Command(name="scrape", description="Force a scrape", handler=handle_scrape),
+            Command(name="schedule", description="View schedule", handler=handle_schedule),
+            Command(name="backup", description="Backup database", handler=handle_backup),
+            Command(name="advisor", description="Financial advisor", handler=handle_advisor),
+            Command(name="debt_add", description="Add/update a debt manually", handler=handle_debt_update),
+            Command(name="bills", description="View upcoming bills", handler=handle_bills),
+            Command(name="bill_add", description="Add a recurring bill", handler=handle_bill_add),
+            Command(name="bill_paid", description="Mark bill as paid", handler=handle_bill_paid),
+            Command(name="forecast", description="Cash flow forecast", handler=handle_forecast, aliases=["cashflow"]),
+            Command(name="budget", description="Budget vs actual spending", handler=handle_budget),
+            Command(name="budget_set", description="Set a category budget", handler=handle_budget_set),
+            Command(name="budget_del", description="Remove a budget", handler=handle_budget_del),
+            Command(name="recat", description="Re-categorize uncategorized transactions", handler=handle_recat),
+            Command(name="guardian", description="Money Guardian anomaly scan", handler=handle_guardian),
+            Command(name="bills_audit", description="Full bill audit — everything owed and when", handler=handle_bills_audit),
+        ]
+
+    def jobs(self) -> list:
+        return get_finance_jobs()
+
+    def callbacks(self) -> list:
+        return [
+            Callback(prefix="billmaster", handler=handle_billmaster_callback,
+                     description="Track/dismiss discovered recurring bills"),
+        ]
+
+    def nl_handlers(self) -> list:
+        advisor_keywords = [
+            "bart", "hey bart",
+            "financial situation", "debt plan", "get out of debt", "what should i do",
+            "financial advice", "advise me", "help me", "my finances", "overall",
+            "complete picture", "everything", "total debt", "how bad", "what do i owe",
+            "plan", "strategy", "priority", "mortgage", "student loan",
+            "collections", "charged off", "settlement", "negotiate", "pay off",
+            "where do i stand", "how much do i owe", "what should i pay",
+            "analyze my", "where can i save", "subscription",
+        ]
+        return [
+            NLHandler(keywords=advisor_keywords, handler=handle_advisor_nl, priority=20,
+                      intent_id="finance.advisor",
+                      description="Financial advisor Bart — debt strategy, savings plans, budgeting, overall financial analysis",
+                      examples=["hey bart what should I do about my debt", "give me a financial plan", "analyze my spending"]),
+            NLHandler(keywords=["is a ", "is an ", "is not ", "categorize ", "that's actually", "isnt a"], handler=handle_finance_nl, priority=18,
+                      intent_id="finance.categorize",
+                      description="Correct or set a merchant's spending category",
+                      examples=["Hilltop Liquors is a liquor store", "Amazon is not groceries", "categorize Cleo as cash advance"]),
+            NLHandler(keywords=["can i afford", "should i buy", "do i have enough", "enough for", "enough to buy"], handler=handle_affordability_nl, priority=15,
+                      intent_id="finance.affordability",
+                      description="Check if user can afford a purchase given current balance and upcoming bills",
+                      examples=["can I afford a $200 pair of shoes", "do I have enough for dinner out", "should I buy that game"]),
+            NLHandler(keywords=["i paid", "i just paid", "paid off", "made a payment", "balance is now", "new balance"], handler=handle_finance_nl, priority=15,
+                      intent_id="finance.payment",
+                      description="Record a manual payment or balance update on a credit card or debt",
+                      examples=["I just paid $200 on my CreditOne", "paid off my AdventHealth bill", "balance is now $1500"]),
+            NLHandler(keywords=["balance", "how much money", "how much do i have", "account", "checking", "savings", "credit card"], handler=handle_finance_nl, priority=10,
+                      intent_id="finance.balance",
+                      description="Check bank account balances, how much money is available, checking/savings amounts",
+                      examples=["how much money do I have", "what's my balance", "what's in my checking account"]),
+            NLHandler(keywords=["debt", "owe", "loan", "payoff"], handler=handle_finance_nl, priority=10,
+                      intent_id="finance.debt",
+                      description="View total debt, credit card balances, loans, what is owed",
+                      examples=["what are my debts", "how much do I owe", "show me my credit card balances"]),
+            NLHandler(keywords=["spending", "spent", "expenses", "transactions", "charges", "subscription"], handler=handle_finance_nl, priority=10,
+                      intent_id="finance.spending",
+                      description="View recent spending summary, transaction history, expense breakdown",
+                      examples=["what have I spent this month", "show my recent transactions", "where's my money going"]),
+            NLHandler(keywords=["due", "payment", "bill", "upcoming"], handler=handle_finance_nl, priority=10,
+                      intent_id="finance.bills",
+                      description="View upcoming bill due dates and minimum payments",
+                      examples=["when are my bills due", "any upcoming payments", "what do I need to pay this week"]),
+        ]
+
+    def system_prompt_fragment(self) -> str:
+        owner = self._profile.owner if self._profile else "the user"
+        return (
+            f"Bart is {owner}'s financial advisor. Address him as Bart or 'hey Bart' for financial questions. "
+            f"You have access to {owner}'s real bank accounts, "
+            "credit cards, and transaction data via Teller API. "
+            f"{owner} is in financial difficulty — be honest, specific, and actionable. "
+            "Never give generic advice. Use /advisor for full financial analysis. "
+            f"{owner} can say 'I paid X on Y' to record payments."
+        )

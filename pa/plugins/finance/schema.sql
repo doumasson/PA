@@ -1,0 +1,80 @@
+CREATE TABLE IF NOT EXISTS finance_accounts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    institution TEXT NOT NULL,
+    name TEXT NOT NULL,
+    type TEXT NOT NULL CHECK(type IN ('checking', 'savings', 'credit_card', 'charge_card', 'store_card', 'mortgage', 'loan', 'medical', 'utility', 'credit')),
+    interest_rate REAL,
+    credit_limit REAL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS finance_balances (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_id INTEGER NOT NULL REFERENCES finance_accounts(id),
+    balance REAL NOT NULL,
+    statement_balance REAL,
+    available_credit REAL,
+    minimum_payment REAL,
+    due_date DATE,
+    scraped_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS finance_transactions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_id INTEGER NOT NULL REFERENCES finance_accounts(id),
+    date DATE NOT NULL,
+    posted_date DATE,
+    description TEXT NOT NULL,
+    amount REAL NOT NULL,
+    category TEXT,
+    dedup_hash TEXT UNIQUE NOT NULL,
+    is_pending BOOLEAN DEFAULT 0,
+    teller_id TEXT,
+    scraped_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS finance_scrape_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    institution TEXT NOT NULL,
+    account_id INTEGER REFERENCES finance_accounts(id),
+    status TEXT NOT NULL CHECK(status IN ('success', 'failure', 'mfa_pending')),
+    error_message TEXT,
+    duration_seconds REAL,
+    ran_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS finance_merchant_categories (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    pattern TEXT NOT NULL UNIQUE,
+    category TEXT NOT NULL,
+    confidence REAL NOT NULL DEFAULT 1.0,
+    source TEXT NOT NULL DEFAULT 'ai',
+    hit_count INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS finance_guardian_alerts (
+    fingerprint TEXT PRIMARY KEY,
+    kind TEXT,
+    detail TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS finance_bill_candidates (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    merchant TEXT NOT NULL UNIQUE,
+    amount REAL, frequency TEXT, next_due TEXT, evidence TEXT,
+    status TEXT NOT NULL DEFAULT 'pending',  -- pending|accepted|dismissed
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS finance_scraper_knowledge (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    institution TEXT UNIQUE NOT NULL,
+    knowledge TEXT NOT NULL DEFAULT '{}',
+    success_count INTEGER DEFAULT 0,
+    failure_count INTEGER DEFAULT 0,
+    last_success TEXT,
+    last_error TEXT,
+    updated_at TEXT
+);

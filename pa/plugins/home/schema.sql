@@ -1,0 +1,16 @@
+CREATE TABLE IF NOT EXISTS home_tasks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,
+    frequency_days INTEGER NOT NULL,
+    last_done TEXT,
+    next_due TEXT,
+    notes TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS home_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_name TEXT NOT NULL,
+    done_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    notes TEXT
+);

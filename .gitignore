@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# Secrets — NEVER commit these
+vault.enc
+*.key
+.env
+config.json
+data/
+vault.params.json
+
+# Database
+*.db
+*.db-journal
+
+# IDE
+.vscode/
+.idea/
+.claude/
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Playwright
+playwright/.cache/
+
+# Logs
+*.log
+logs/
+
+# Local config overlay — personal values, never commit
+config.local.json

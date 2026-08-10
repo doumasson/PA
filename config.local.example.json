@@ -1,0 +1,13 @@
+{
+  "telegram_user_id": 0,
+  "data_dir": "",
+  "profile": {
+    "owner": "Your Name",
+    "timezone": "America/Denver",
+    "monthly_income": 0.0,
+    "goals": ["debt-free in 2 years"],
+    "kids": [
+      {"name": "Kid One", "birth_year": 2014, "notes": "plays basketball"}
+    ]
+  }
+}

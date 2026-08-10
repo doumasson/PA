@@ -1,0 +1,33 @@
+{
+  "telegram_bot_token_env": "PA_TELEGRAM_TOKEN",
+  "llm": {
+    "backends": {
+      "cliproxy": {
+        "base_url": "http://localhost:8317/v1",
+        "trusted": false,
+        "models": {
+          "parse": "claude-haiku-4-5",
+          "reason": "claude-sonnet-4-5-20250929"
+        }
+      }
+    },
+    "tiers": {
+      "parse": ["cliproxy"],
+      "reason": ["cliproxy"]
+    },
+    "scrub_untrusted": true
+  },
+  "plugins": {
+    "enabled": null,
+    "ignore_broken": false
+  },
+  "schedule": {
+    "bank_balance_hours": 4,
+    "cc_balance_daily_time": "06:00",
+    "transaction_pull_daily_time": "07:00",
+    "due_date_check_time": "08:00",
+    "weekly_summary_day": "sunday",
+    "weekly_summary_time": "19:00"
+  },
+  "backup_path": ""
+}

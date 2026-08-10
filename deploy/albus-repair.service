@@ -1,0 +1,12 @@
+[Unit]
+Description=Albus repair daemon (one tick: watchdog, diagnose, apply)
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=admin
+WorkingDirectory=/home/admin/pa-v2
+EnvironmentFile=/home/admin/pa/.env
+ExecStart=/home/admin/pa/.venv/bin/python tools/repair_daemon.py
+# Diagnosis can legitimately take a while (Claude Code run + tests)
+TimeoutStartSec=35min
